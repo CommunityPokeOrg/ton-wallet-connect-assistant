@@ -103,6 +103,16 @@ class FakeTdLib:
                 "@type": "chat", "id": request["chat_id"],
                 "title": titles[request["chat_id"]], "@extra": extra,
             }))
+        elif td_type == "searchPublicChat":
+            q.put(json.dumps({
+                "@type": "chat", "id": 42,
+                "title": "@" + request["username"], "@extra": extra,
+            }))
+        elif td_type == "getWebAppUrl":
+            q.put(json.dumps({
+                "@type": "httpUrl", "url": "https://webapp.wallet.example/",
+                "query_id": "AAECAwQF", "@extra": extra,
+            }))
         elif td_type == "sendMessage":
             q.put(json.dumps({
                 "@type": "message", "id": 9000,
@@ -602,3 +612,148 @@ def test_no_native_wrapper_files_in_package():
     src = pathlib.Path(__file__).resolve().parents[1] / "src" / "ton_wallet_assistant"
     native = [p for p in src.rglob("*") if p.suffix in {".c", ".cpp", ".pyx", ".so", ".dll", ".dylib"}]
     assert native == [], f"native artifacts found: {native}"
+
+
+# ------------------------------------------------------------ web app resolve
+
+
+def test_resolve_webapp_requires_auth(tmp_path):
+    from ton_wallet_assistant.telegram.mini_apps import parse_tma_link
+
+    async def run():
+        client = TdJsonClient(_config(tmp_path), lib=FakeTdLib())
+        await client.start()
+        await asyncio.sleep(0.05)
+        ctx = parse_tma_link("https://t.me/wallet/start?startapp=x")
+        with pytest.raises(TelegramError, match="not authenticated"):
+            await client.resolve_webapp(ctx)
+        await client.close()
+
+    asyncio.run(run())
+
+
+def test_resolve_webapp_success(tmp_path):
+    from ton_wallet_assistant.telegram.mini_apps import parse_tma_link
+
+    lib = FakeTdLib()
+
+    async def run():
+        client = TdJsonClient(_config(tmp_path), lib=lib)
+        await client.start()
+        await client.submit_phone("+15551234567")
+        await asyncio.sleep(0.1)
+        await client.submit_code("12345")
+        await asyncio.sleep(0.1)
+        ctx = parse_tma_link("https://t.me/wallet/start?startapp=abc")
+        result = await client.resolve_webapp(ctx)
+        assert result["url"] == "https://webapp.wallet.example/"
+        assert result["query_id"] == "AAECAwQF"
+        assert result["method"] == "getWebAppUrl"
+        # request carried the bot, app short name and start_parameter
+        reqs = [r for r in lib.requests if r["@type"] == "getWebAppUrl"]
+        assert reqs and reqs[0]["bot_user_id"] == 42
+        assert reqs[0]["web_app_short_name"] == "start"
+        assert reqs[0]["start_parameter"] == "abc"
+        await client.close()
+
+    asyncio.run(run())
+
+
+def test_resolve_webapp_method_ladder_fallback(tmp_path):
+    from ton_wallet_assistant.telegram.mini_apps import parse_tma_link
+
+    class NoGetWebAppUrl(FakeTdLib):
+        def td_json_client_send(self, client, data):
+            request = json.loads(data.decode())
+            if request["@type"] == "getWebAppUrl":
+                self.clients[client].put(json.dumps({
+                    "@type": "error", "code": 400,
+                    "message": "method not found", "@extra": request.get("@extra"),
+                }))
+                return
+            if request["@type"] == "searchWebApp":
+                self.clients[client].put(json.dumps({
+                    "@type": "foundWebApp",
+                    "web_app": {"url": "https://found.example/app"},
+                    "@extra": request.get("@extra"),
+                }))
+                return
+            super().td_json_client_send(client, data)
+
+    async def run():
+        client = TdJsonClient(_config(tmp_path), lib=NoGetWebAppUrl())
+        await client.start()
+        await client.submit_phone("+15551234567")
+        await asyncio.sleep(0.1)
+        await client.submit_code("12345")
+        await asyncio.sleep(0.1)
+        ctx = parse_tma_link("https://t.me/wallet/app?startapp=p")
+        result = await client.resolve_webapp(ctx)
+        assert result["url"] == "https://found.example/app"
+        assert result["method"] == "searchWebApp"
+        await client.close()
+
+    asyncio.run(run())
+
+
+def test_resolve_webapp_no_supported_method(tmp_path):
+    from ton_wallet_assistant.telegram.mini_apps import parse_tma_link
+
+    class OldTdLib(FakeTdLib):
+        def td_json_client_send(self, client, data):
+            request = json.loads(data.decode())
+            if request["@type"] in {"getWebAppUrl", "searchWebApp", "getWebAppLinkUrl"}:
+                self.clients[client].put(json.dumps({
+                    "@type": "error", "code": 400,
+                    "message": "unknown method", "@extra": request.get("@extra"),
+                }))
+                return
+            super().td_json_client_send(client, data)
+
+    async def run():
+        client = TdJsonClient(_config(tmp_path), lib=OldTdLib())
+        await client.start()
+        await client.submit_phone("+15551234567")
+        await asyncio.sleep(0.1)
+        await client.submit_code("12345")
+        await asyncio.sleep(0.1)
+        ctx = parse_tma_link("https://t.me/wallet")
+        with pytest.raises(TelegramError, match="no supported web-app"):
+            await client.resolve_webapp(ctx)
+        await client.close()
+
+    asyncio.run(run())
+
+
+def test_demo_client_resolve_webapp_synthetic():
+    from ton_wallet_assistant.telegram.demo import DemoTelegramClient
+    from ton_wallet_assistant.telegram.mini_apps import parse_tma_link
+
+    async def run():
+        client = DemoTelegramClient()
+        await client.start()
+        await client.submit_phone("+10000000000")
+        await client.submit_code("12345")
+        ctx = parse_tma_link("https://t.me/wallet/start?startapp=abc")
+        result = await client.resolve_webapp(ctx)
+        assert result["demo"] is True
+        assert result["url"] == ctx.url
+        await client.close()
+
+    asyncio.run(run())
+
+
+def test_sdk_demo_resolve_mini_app(tmp_path):
+    from ton_wallet_assistant.telegram.mini_apps import WebAppResolution
+
+    async def run():
+        sdk = await TonWalletSDK.demo()
+        res = await sdk.resolve_mini_app("https://t.me/wallet/start?startapp=xyz")
+        assert isinstance(res, WebAppResolution)
+        assert res.via == "demo"
+        assert res.authenticated is False
+        assert res.init_data_unsafe["start_param"] == "xyz"
+        assert res.init_data_unsafe["demo"] is True  # never fakes signed data
+        await sdk.close()
+
+    asyncio.run(run())

@@ -126,6 +126,22 @@ class PairingManager:
 
     _nonces = None  # set in start()
 
+    async def submit_local(self, raw_payload: str, *, origin: str = "local") -> str:
+        """Trusted local intake (embedded webview, CLI, tests) — runs on the
+        io loop, skips the nonce/replay check that guards the HTTP endpoint.
+        Does not require the bridge server to be running."""
+        kind, payload = parse_payload(raw_payload)
+        req = RelayedRequest(
+            request_id=secrets.token_hex(8),
+            kind=kind,
+            payload=payload,
+            origin_ip=origin,
+        )
+        with self._lock:
+            self._requests[req.request_id] = req
+        self._incoming.put_nowait(req)
+        return req.request_id
+
     async def start(self) -> str:  # noqa: F811 — redefined to init NonceTracker on the loop
         if self._server is not None:
             return self.pairing_url

@@ -23,6 +23,9 @@ dependencies = [
 gui = [
     "PySide6>=6.8,<6.12",
 ]
+webview = [  # embedded Mini Apps view — optional; the app works without it
+    "PySide6-Addons>=6.8,<6.12",  # QtWebEngine + QtWebChannel
+]
 dev = [
     "pytest>=8,<9",
     "ruff>=0.5",

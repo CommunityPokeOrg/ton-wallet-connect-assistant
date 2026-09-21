@@ -100,5 +100,16 @@ class DemoTelegramClient(TelegramClient):
         )
         return msg
 
+    async def resolve_webapp(self, context, **_kwargs) -> dict:
+        """Synthetic web app resolution — demo/offline only, clearly marked."""
+        if not self.is_ready:
+            raise TelegramError("not authenticated", code=401)
+        return {
+            "url": context.url,
+            "query_id": "",
+            "method": "demo",
+            "demo": True,
+        }
+
     async def close(self) -> None:
         self._set_auth_state(TelegramAuthState.CLOSED)

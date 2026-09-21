@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from .services.base import WalletService
+    from .telegram.mini_apps import WebAppResolution
     from .wallet.chain import ChainClient
     from .wallet.keystore import Keystore
 
@@ -521,6 +522,69 @@ class TonWalletSDK:
         except Exception:
             return False
         return True
+
+    # ------------------------------------------------- mini apps (TMA)
+
+    async def resolve_mini_app(self, url_or_context) -> WebAppResolution:
+        """Resolve a mini-app launch target.
+
+        Accepts a ``https://t.me/<bot>[/<app>][?startapp=…]`` link or an
+        already-parsed ``TmaLaunchContext``. Returns a
+        ``WebAppResolution`` with the URL to load and the initData to
+        inject:
+
+        - authenticated TDLib session → real launch URL + query_id
+        - demo mode / no Telegram session → synthetic resolution,
+          clearly marked (``via='demo'``, ``authenticated=False``)
+        - real mode without auth → falls back to the public t.me
+          redirect/iframe target; initData carries start_param only.
+        """
+        from .telegram.mini_apps import (
+            TmaLaunchContext,
+            WebAppResolution,
+            build_init_data,
+            demo_webapp_resolution,
+            parse_tma_link,
+            resolve_tma_url,
+        )
+
+        context = (
+            url_or_context
+            if isinstance(url_or_context, TmaLaunchContext)
+            else parse_tma_link(url_or_context)
+        )
+        if self.demo:
+            return demo_webapp_resolution(context)
+
+        client = self.telegram
+        if client.is_ready:
+            result = await client.resolve_webapp(context)
+            init_data, unsafe = build_init_data(
+                context.start_param, query_id=result.get("query_id", "")
+            )
+            return WebAppResolution(
+                url=result["url"],
+                init_data=init_data,
+                init_data_unsafe=unsafe,
+                via="tdlib",
+                authenticated=True,
+                query_id=result.get("query_id", ""),
+                bot=context.bot,
+                app=context.app,
+            )
+        # Unauthenticated real mode — Telegram's own public resolution;
+        # start_param-only initData, never presented as authenticated.
+        target = resolve_tma_url(context)
+        init_data, unsafe = build_init_data(context.start_param)
+        return WebAppResolution(
+            url=target,
+            init_data=init_data,
+            init_data_unsafe=unsafe,
+            via="http-resolve",
+            authenticated=False,
+            bot=context.bot,
+            app=context.app,
+        )
 
     # ------------------------------------------------- low-level building
 

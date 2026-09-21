@@ -91,6 +91,36 @@ used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets
 - Demo mode simulates the entire flow offline — phone, code `12345`,
   chats, and message updates — clearly labelled, no network.
 
+## Telegram Mini Apps (experimental)
+
+The **Mini Apps** tab hosts Telegram WebApps inside the app window. The
+embedded view uses `PySide6.QtWebEngineWidgets` (install the optional
+`webview` extra: `pip install -e ".[gui,webview]"` — it pulls in
+`PySide6-Addons`/QtWebEngine). Without it — or under `QT_QPA_PLATFORM=offscreen`
+/ `TWA_DISABLE_WEBENGINE=1` — the tab falls back to a link-parsing panel with
+an "Open in browser" action; nothing crashes.
+
+- `t.me/<bot>/<app>?startapp=…` links are parsed and the TonConnect compact
+  encoding (`tonconnect-v__2-id__…-r__<json>`) is decoded for the context
+  panel; opaque payloads pass through untouched.
+- Resolution order for t.me links: an **authenticated TDLib session**
+  (`getWebAppUrl`/`searchWebApp` — real launch URL + `query_id`) → Telegram's
+  own public t.me redirect/iframe target → clearly-labelled synthetic demo
+  context → a plain error when resolution needs Telegram sign-in.
+- The injected `window.Telegram.WebApp` shim covers `initData`/`initDataUnsafe`
+  (incl. `start_param`), theme params matching the desktop dark theme,
+  `ready/expand/close/sendData`, `openLink/openTelegramLink/openInvoice`,
+  `showPopup/showAlert/showConfirm/showScanQrPopup`, `readTextFromClipboard`,
+  `MainButton`/`BackButton`/`SettingsButton`, `HapticFeedback`, and
+  `CloudStorage` CRUD — all bridged to Python through QWebChannel with strict
+  event validation (unknown events are dropped).
+- Native desktop chrome mirrors real TMA hosting: header bar (back, title,
+  settings, close) and a bottom MainButton wired to the shim.
+- **Security:** mini apps run untrusted web content. `tc://`, `ton://`, and
+  `tg://` links plus `sendData` payloads are never executed in-page — they are
+  routed to the same explicit desktop approval dialog as the mobile companion.
+  Keys are never exposed to the webview; initData/query_id are never logged.
+
 ## Quick start
 
 ```bash
@@ -184,6 +214,15 @@ await tg.get_chats(); await tg.send_message(chat_id, "hi")
 async for update in tg.updates(): ...
 ```
 
+Mini-app resolution (headless — returns the URL to host plus the initData
+to inject; demo mode returns clearly-marked synthetic data):
+
+```python
+res = await sdk.resolve_mini_app("https://t.me/wallet/start?startapp=…")
+res.url, res.init_data, res.init_data_unsafe["start_param"]
+res.via, res.authenticated   # 'tdlib' | 'http-resolve' | 'demo'
+```
+
 See `examples/sdk_demo.py`, `examples/pairing_demo.py`, and
 `examples/telegram_demo.py` for runnable walkthroughs.
 
@@ -252,7 +291,9 @@ src/ton_wallet_assistant/
 ├── telegram/              # Telegram client — pure Python + ctypes libtdjson
 │   ├── config.py          # env config (TELEGRAM_API_ID/HASH, TDLIB_PATH)
 │   ├── client.py          # TelegramClient ABC + auth state machine
-│   ├── tdjson.py          # ctypes wrapper + async client (no Cython/C ext)
+│   ├── tdjson.py          # ctypes wrapper + async client + webapp resolve
+│   ├── mini_apps.py       # t.me/startapp parsing, initData, WebApp JS shim
+│   ├── webapp_runtime.py  # host-side runtime state + event validation
 │   └── demo.py            # offline demo client (code 12345)
 └── gui/
     ├── async_loop.py      # asyncio thread bridged to Qt signals
@@ -264,6 +305,8 @@ src/ton_wallet_assistant/
     ├── collectibles_tab.py# NFT grid
     ├── connect_tab.py     # TonConnect wallet-connect flow
     ├── companion_tab.py   # mobile pairing: bridge control + approvals
+    ├── mini_apps_tab.py   # embedded Mini Apps host + fallback panel
+    ├── webapp_bridge.py   # QWebChannel bridge: Telegram.WebApp events
     ├── telegram_tab.py    # Telegram TDLib auth + chats + update feed
     ├── settings_tab.py    # lock, reveal phrase, delete wallet, config info
     ├── dialogs.py         # password / send-confirm / receive / tx details /
@@ -303,8 +346,11 @@ lifecycle), companion pairing (token auth, payload validation, nonce/timestamp
 replay protection, approval state machine, HTTP endpoints, SDK demo flow),
 Telegram TDLib (env config validation, ctypes request/response + auth states +
 update dispatch + errors + shutdown against an in-process fake libtdjson, demo
-client flow, no-native-code guard), and a headless (offscreen) end-to-end GUI
-flow across all pages. CI runs lint + tests on Linux, Windows, and macOS.
+client flow, no-native-code guard), mini-apps runtime (exact t.me TonConnect
+payload decoding, JS escaping, event whitelist, cloud-storage RPC, TDLib
+webapp resolution success/ladder/error paths, demo initData, headless tab
+construction), and a headless (offscreen) end-to-end GUI flow across all
+pages. CI runs lint + tests on Linux, Windows, and macOS.
 
 ## Notes & limitations
 
@@ -319,3 +365,12 @@ flow across all pages. CI runs lint + tests on Linux, Windows, and macOS.
   non-Python component — loaded via ctypes; nothing compiled at build time and
   no Cython/native wrapper in this repo). User-account auth via TDLib requires
   your own api_id/api_hash from https://my.telegram.org.
+- The embedded Mini Apps view needs the optional `webview` extra
+  (QtWebEngine/Chromium — heavy); without it the tab degrades to link parsing
+  + external launch. TDLib webapp resolution requires an authenticated
+  session and a TDLib build exposing `getWebAppUrl`/`searchWebApp`; older
+  builds report which methods were tried. Unauthenticated resolution relies
+  on Telegram's public t.me redirect — apps that require Telegram login show
+  a clear error instead of a fake handshake. Popups/haptics/invoices are
+  simulated (native QMessageBox, no real haptics); CloudStorage is in-memory
+  per page load.

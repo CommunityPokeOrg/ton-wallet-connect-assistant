@@ -341,6 +341,77 @@ class TdJsonClient(TelegramClient):
             },
         )
 
+    # ---------------------------------------------------------- web apps
+
+    async def resolve_webapp(
+        self,
+        context,
+        *,
+        theme_params: dict | None = None,
+        platform: str = "tdesktop",
+    ) -> dict:
+        """Resolve a ``t.me/<bot>[/<app>]`` link into a WebApp launch URL via
+        TDLib. Requires an authenticated session (READY).
+
+        TDLib versions differ in which method exists — the client probes
+        ``WEBAPP_TD_METHODS`` in order and reports which succeeded. Raises
+        TelegramError listing the tried methods when none are supported.
+        The returned dict carries ``url``/``query_id``/``method``; initData
+        secrets are never logged.
+        """
+        from .mini_apps import WEBAPP_TD_METHODS
+
+        if self._auth_state is not TelegramAuthState.READY:
+            raise TelegramError("not authenticated — sign in before resolving web apps", 401)
+
+        chat = await self._request("searchPublicChat", username=context.bot)
+        user_id = chat.get("id")
+        if not isinstance(user_id, int):
+            raise TelegramError(f"bot @{context.bot} not found", 404)
+
+        theme = {
+            "@type": "themeParameters",
+            **(theme_params or {}),
+        }
+        errors: list[str] = []
+        for method in WEBAPP_TD_METHODS:
+            try:
+                if method == "searchWebApp":
+                    result = await self._request(
+                        "searchWebApp",
+                        bot_user_id=user_id,
+                        web_app_short_name=context.app,
+                    )
+                else:
+                    result = await self._request(
+                        method,
+                        bot_user_id=user_id,
+                        web_app_short_name=context.app,
+                        start_parameter=context.start_param,
+                        theme=theme,
+                        platform=platform,
+                    )
+            except TelegramError as exc:
+                errors.append(f"{method}: {exc}")
+                continue
+            url = (
+                result.get("url")
+                or (result.get("web_app") or {}).get("url")
+                or result.get("launch_url")
+            )
+            if url:
+                return {
+                    "url": url,
+                    "query_id": result.get("query_id", ""),
+                    "method": method,
+                }
+            errors.append(f"{method}: no url in {result.get('@type', 'response')}")
+        raise TelegramError(
+            "no supported web-app resolution method on this TDLib build ("
+            + "; ".join(errors) + ")",
+            501,
+        )
+
     async def close(self) -> None:
         if self._auth_state is TelegramAuthState.READY and not self._log_out_sent:
             try:

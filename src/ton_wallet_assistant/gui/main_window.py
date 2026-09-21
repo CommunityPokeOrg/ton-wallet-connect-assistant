@@ -24,6 +24,7 @@ from .companion_tab import CompanionTab
 from .connect_tab import ConnectTab
 from .dialogs import show_error
 from .history_tab import HistoryTab
+from .mini_apps_tab import MiniAppsTab
 from .onboarding import OnboardingWidget
 from .settings_tab import SettingsTab
 from .telegram_tab import TelegramTab
@@ -132,7 +133,8 @@ class MainWindow(QMainWindow):
         self.nav.setObjectName("sidebar")
         self.nav.setFixedWidth(180)
         for label in (
-            "Wallet", "History", "Collectibles", "TonConnect", "Pairing", "Telegram", "Settings"
+            "Wallet", "History", "Collectibles", "TonConnect", "Pairing",
+            "Mini Apps", "Telegram", "Settings"
         ):
             self.nav.addItem(label)
         nav = self.nav
@@ -144,6 +146,12 @@ class MainWindow(QMainWindow):
         self.collectibles_tab = CollectiblesTab(session, self.async_loop)
         self.connect_tab = ConnectTab(self.config, self.connect_service, self.async_loop)
         self.companion_tab = CompanionTab(session, self.async_loop)
+        self.mini_apps_tab = MiniAppsTab(
+            session,
+            self.async_loop,
+            submit_link=self.companion_tab.relay_local,
+            resolver=self._resolve_webapp,
+        )
         self.telegram_tab = TelegramTab(session, self.async_loop)
         self.settings_tab = SettingsTab(self.config, session, self.async_loop, self._on_wallet_deleted)
         for page in (
@@ -152,6 +160,7 @@ class MainWindow(QMainWindow):
             self.collectibles_tab,
             self.connect_tab,
             self.companion_tab,
+            self.mini_apps_tab,
             self.telegram_tab,
             self.settings_tab,
         ):
@@ -166,6 +175,18 @@ class MainWindow(QMainWindow):
         suffix = " [DEMO]" if session.demo else ""
         self.setWindowTitle(f"TON Wallet — {session.account.short_address}{suffix}")
 
+    async def _resolve_webapp(self, context):
+        """TDLib-backed mini-app resolution — returns None unless the
+        Telegram client is authenticated, so the tab falls back to
+        Telegram's public t.me redirect resolution."""
+        client = self.telegram_tab.client
+        if client is not None and client.is_ready:
+            try:
+                return await client.resolve_webapp(context)
+            except Exception:
+                return None
+        return None
+
     def _on_wallet_deleted(self) -> None:
         self.session = None
         self._show_onboarding()
@@ -174,6 +195,7 @@ class MainWindow(QMainWindow):
         try:
             if self.session is not None:
                 self.companion_tab.shutdown()
+                self.mini_apps_tab.shutdown()
                 self.telegram_tab.shutdown()
                 self.async_loop.submit(self.session.chain.close())
             self.async_loop.submit(self.connect_service.close())

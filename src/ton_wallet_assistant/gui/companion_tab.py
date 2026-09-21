@@ -175,6 +175,12 @@ class CompanionTab(QWidget):
         self._dialog_open_for = None
         self._refresh_requests()
 
+    def relay_local(self, payload: str, origin: str = "local") -> None:
+        """Queue a locally-originated payload (e.g. from the Mini Apps tab)
+        into the same explicit approval flow — nothing is signed without
+        the approval dialog."""
+        self.async_loop.submit(self.manager.submit_local(payload, origin=origin))
+
     # ------------------------------------------------------------ handlers
 
     def _approve(self, req_id: str, password: str) -> None:

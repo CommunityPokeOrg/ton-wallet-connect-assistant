@@ -20,9 +20,11 @@ from .loader import (
     searched_paths,
 )
 from .tdjson import TdJson, TdJsonClient, TdJsonLoadError
+from .webapp_runtime import KNOWN_EVENTS, WebAppRuntime
 
 __all__ = [
     "DemoTelegramClient",
+    "KNOWN_EVENTS",
     "TdJson",
     "TdJsonClient",
     "TdJsonLoadError",
@@ -32,6 +34,7 @@ __all__ = [
     "TelegramConfigError",
     "TelegramError",
     "TelegramUpdate",
+    "WebAppRuntime",
     "candidate_dirs",
     "platform_library_name",
     "resolve_tdjson_library",

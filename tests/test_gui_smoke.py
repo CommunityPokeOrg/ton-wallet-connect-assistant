@@ -41,7 +41,18 @@ def test_demo_mode_full_flow(app):
         connect_tab = window.connect_tab
 
         # Sidebar navigation exposes all pages.
-        assert window.nav.count() == 7
+        assert window.nav.count() == 8
+        # Mini Apps tab exists; under offscreen CI the webview is disabled
+        # and the fallback panel is shown instead.
+        mini_tab = window.mini_apps_tab
+        assert mini_tab.web_view is None
+        assert mini_tab.presets.count() > 1
+        # t.me parsing drives the context panel (demo resolution is sync)
+        mini_tab.url_edit.setText(
+            "https://t.me/wallet/start?startapp=tonconnect-v__2-id__abc"
+        )
+        mini_tab._load_clicked()
+        assert "wallet" in mini_tab.context_label.text()
         # Companion/pairing tab exists and its bridge can start (loopback in demo).
         assert window.companion_tab.manager.demo
         # Telegram tab is present and drives the demo client auth flow.
