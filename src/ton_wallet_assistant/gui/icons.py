@@ -15,7 +15,7 @@ from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 
 def _color_for(key: str) -> QColor:
     digest = hashlib.sha1(key.encode()).digest()
-    hue = int.from_bytes(digest[:2]) % 360
+    hue = int.from_bytes(digest[:2], "big") % 360
     return QColor.fromHsv(hue, 140, 200)
 
 

@@ -486,7 +486,7 @@ def test_config_resolve_tdlib_path_and_test_dc(tmp_path):
         file_config={"telegram": {"tdlib_path": "/opt/td/libtdjson.so", "test_dc": True}},
         data_dir=tmp_path,
     )
-    assert str(cfg.tdlib_path) == "/opt/td/libtdjson.so"
+    assert cfg.tdlib_path == Path("/opt/td/libtdjson.so")
     assert cfg.use_test_dc is True
 
 

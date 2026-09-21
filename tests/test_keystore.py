@@ -1,4 +1,6 @@
+import os
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,10 @@ def test_create_unlock_roundtrip(ks_path):
     assert words == MNEMONIC
 
 
+@pytest.mark.skipif(
+    not hasattr(os, "chmod") or sys.platform == "win32",
+    reason="POSIX file permissions are not enforced on Windows",
+)
 def test_file_permissions_owner_only(ks_path):
     ks = Keystore(ks_path)
     ks.create(MNEMONIC, PASSWORD)
