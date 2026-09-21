@@ -35,6 +35,7 @@ APP_DIR_NAME = "ton-wallet-connect-assistant"
 ENV_MANIFEST_URL = "TON_WALLET_ASSISTANT_MANIFEST_URL"
 ENV_DEMO = "TON_WALLET_ASSISTANT_DEMO"
 ENV_DEMO_NETWORK = "TON_WALLET_ASSISTANT_DEMO_NETWORK"
+ENV_NETWORK = "TON_WALLET_ASSISTANT_NETWORK"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
@@ -77,6 +78,7 @@ class AppConfig:
     manifest_url: str | None
     demo_mode: bool
     demo_network: str
+    network: str
     storage_path: Path
     config_path: Path
 
@@ -91,6 +93,7 @@ class AppConfig:
         manifest_url: str | None = None,
         demo: bool | None = None,
         demo_network: str | None = None,
+        network: str | None = None,
         env: dict | None = None,
         file_config: dict | None = None,
     ) -> AppConfig:
@@ -113,6 +116,9 @@ class AppConfig:
         )
         if demo_network not in ("mainnet", "testnet"):
             demo_network = "mainnet"
+        network = network or env.get(ENV_NETWORK) or file_config.get("network") or "mainnet"
+        if network not in ("mainnet", "testnet"):
+            network = "mainnet"
 
         # Without a manifest URL there is nothing a real wallet can verify the
         # dApp against, so the app must run in demo mode.
@@ -124,6 +130,7 @@ class AppConfig:
             manifest_url=manifest_url,
             demo_mode=demo,
             demo_network=demo_network,
+            network=network,
             storage_path=cfg_dir / "tonconnect-session.json",
             config_path=_config_file(),
         )

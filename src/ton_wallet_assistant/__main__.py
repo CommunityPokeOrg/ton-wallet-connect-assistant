@@ -25,6 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["mainnet", "testnet"],
         help="Network the demo wallet pretends to use (default: mainnet).",
     )
+    parser.add_argument(
+        "--network",
+        choices=["mainnet", "testnet"],
+        help="Blockchain network for the wallet (default: mainnet).",
+    )
     return parser
 
 
@@ -38,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest_url=args.manifest_url,
         demo=True if args.demo else None,
         demo_network=args.demo_network,
+        network=args.network,
     )
 
     if config.demo_mode:

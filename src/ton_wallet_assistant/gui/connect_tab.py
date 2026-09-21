@@ -1,16 +1,15 @@
-"""PySide6 desktop UI for the TON Wallet Connect Assistant."""
+"""TonConnect tab — connect external wallets (Telegram Wallet, Tonkeeper, …).
+
+This is the original wallet-connect assistant flow, kept intact: pick a wallet,
+show a QR / universal link / deep link, track approval state, show the approved
+account, disconnect.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import threading
-from collections.abc import Callable
-from concurrent.futures import Future
-
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
-    QApplication,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -18,17 +17,17 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
-    QMainWindow,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from .config import AppConfig
-from .models import ConnectedAccount, ConnectionState, ServiceEvent, WalletOption
-from .qr import qr_png_bytes
-from .services.base import WalletService
+from ..config import AppConfig
+from ..models import ConnectedAccount, ConnectionState, ServiceEvent, WalletOption
+from ..qr import qr_png_bytes
+from ..services.base import WalletService
+from .async_loop import AsyncLoop
 
 _STATE_COLORS = {
     ConnectionState.DISCONNECTED: "#9e9e9e",
@@ -45,68 +44,16 @@ _STATE_TEXT = {
 }
 
 
-class AsyncLoop(QObject):
-    """Owns a dedicated asyncio loop on a daemon thread.
+class ConnectTab(QWidget):
+    """The TonConnect wallet-connect assistant UI."""
 
-    Wallet I/O (SSE bridge listening, HTTP fetches) is async; Qt is not. This
-    bridge lets the GUI submit coroutines and receive results without blocking
-    the UI thread.
-    """
-
-    invoke_in_gui = Signal(object)  # callable -> executed on the GUI thread
-
-    def __init__(self, parent: QObject | None = None) -> None:
-        super().__init__(parent)
-        self.invoke_in_gui.connect(self._run_callable)
-        self._loop = asyncio.new_event_loop()
-        self._thread = threading.Thread(target=self._loop_runner, name="wallet-io", daemon=True)
-        self._thread.start()
-
-    def _loop_runner(self) -> None:
-        asyncio.set_event_loop(self._loop)
-        self._loop.run_forever()
-
-    def _run_callable(self, fn: Callable) -> None:
-        fn()
-
-    def post_to_gui(self, fn: Callable) -> None:
-        self.invoke_in_gui.emit(fn)
-
-    def submit(self, coro, on_done: Callable | None = None) -> Future:
-        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-
-        def _done(f: Future) -> None:
-            def deliver() -> None:
-                try:
-                    result = f.result()
-                except asyncio.CancelledError:
-                    return
-                except Exception as exc:  # surfaced to the UI as an error event
-                    if on_done:
-                        on_done(None, exc)
-                    return
-                if on_done:
-                    on_done(result, None)
-
-            self.post_to_gui(deliver)
-
-        if on_done:
-            future.add_done_callback(_done)
-        return future
-
-    def stop(self) -> None:
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        self._thread.join(timeout=2)
-
-
-class MainWindow(QMainWindow):
     event_received = Signal(object)  # ServiceEvent
 
-    def __init__(self, config: AppConfig, service: WalletService, loop: AsyncLoop | None = None) -> None:
-        super().__init__()
+    def __init__(self, config: AppConfig, service: WalletService, async_loop: AsyncLoop, parent=None) -> None:
+        super().__init__(parent)
         self.config = config
         self.service = service
-        self.async_loop = loop or AsyncLoop(self)
+        self.async_loop = async_loop
         self.service.set_event_callback(self._on_service_event)
         self.event_received.connect(self._handle_service_event)
 
@@ -114,8 +61,6 @@ class MainWindow(QMainWindow):
         self._current_link = ""
         self._account: ConnectedAccount | None = None
 
-        self.setWindowTitle("TON Wallet Connect Assistant")
-        self.resize(760, 640)
         self._build_ui()
         self._set_state(ConnectionState.DISCONNECTED)
         self._refresh_wallets()
@@ -124,21 +69,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ UI
 
     def _build_ui(self) -> None:
-        root = QWidget(self)
-        outer = QVBoxLayout(root)
-
-        header = QHBoxLayout()
-        title = QLabel("<b>TON Wallet Connect Assistant</b>")
-        title.setStyleSheet("font-size: 16px;")
-        header.addWidget(title)
-        header.addStretch(1)
-        self.mode_badge = QLabel("DEMO MODE" if self.config.demo_mode else "LIVE")
-        self.mode_badge.setStyleSheet(
-            "padding: 2px 8px; border-radius: 8px; font-weight: bold; "
-            + ("background:#f0a020; color:#202020;" if self.config.demo_mode else "background:#2ecc71; color:#202020;")
-        )
-        header.addWidget(self.mode_badge)
-        outer.addLayout(header)
+        outer = QVBoxLayout(self)
 
         if self.config.demo_mode:
             banner = QLabel(
@@ -218,8 +149,6 @@ class MainWindow(QMainWindow):
         self.log_view.setFixedHeight(110)
         outer.addWidget(self.log_view)
 
-        self.setCentralWidget(root)
-
     def _copyable_row(self, form: QFormLayout, label: str) -> QLineEdit:
         row = QHBoxLayout()
         edit = QLineEdit()
@@ -235,8 +164,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------- actions
 
     def _on_service_event(self, event: ServiceEvent) -> None:
-        # Called from the asyncio thread — marshal to the GUI thread.
-        self.event_received.emit(event)
+        self.event_received.emit(event)  # marshal from the io thread
 
     def _handle_service_event(self, event: ServiceEvent) -> None:
         if event.state == ConnectionState.CONNECTED and event.account:
@@ -275,9 +203,6 @@ class MainWindow(QMainWindow):
         self._log(f"{len(self._wallets)} wallet(s) available")
 
     def _on_wallet_selected(self, _row: int) -> None:
-        self._update_connect_button()
-
-    def _update_connect_button(self) -> None:
         self.connect_button.setEnabled(self.wallet_list.currentRow() >= 0)
 
     def _connect_clicked(self) -> None:
@@ -361,17 +286,3 @@ class MainWindow(QMainWindow):
         from datetime import datetime
 
         self.log_view.appendPlainText(f"[{datetime.now():%H:%M:%S}] {message}")
-
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
-        try:
-            self.async_loop.submit(self.service.close())
-        finally:
-            self.async_loop.stop()
-        super().closeEvent(event)
-
-
-def run_app(config: AppConfig, service: WalletService) -> int:
-    app = QApplication.instance() or QApplication([])
-    window = MainWindow(config, service)
-    window.show()
-    return app.exec()
