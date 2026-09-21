@@ -11,9 +11,11 @@ import json
 import queue
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
+import ton_wallet_assistant.telegram
 from ton_wallet_assistant.sdk import TonWalletSDK
 from ton_wallet_assistant.telegram import (
     DemoTelegramClient,
@@ -331,6 +333,116 @@ def test_tdjson_request_before_start_fails(tmp_path):
             await client.submit_phone("+15551234567")
 
     asyncio.run(run())
+
+
+# --------------------------------------------------------- library resolver
+
+
+def test_platform_library_names():
+    from ton_wallet_assistant.telegram.loader import platform_library_name
+
+    assert platform_library_name("darwin") == "libtdjson.dylib"
+    assert platform_library_name("linux") == "libtdjson.so"
+    assert platform_library_name("win32") == "tdjson.dll"
+    assert platform_library_name("freebsd13") == "libtdjson.so"
+
+
+def test_bundle_dirs_for_macos_app():
+    from ton_wallet_assistant.telegram.loader import _bundle_dirs
+
+    exe = Path("/Applications/TonWallet.app/Contents/MacOS/ton-wallet-assistant")
+    dirs = _bundle_dirs(exe)
+    assert Path("/Applications/TonWallet.app/Contents/Frameworks") in dirs
+    assert Path("/Applications/TonWallet.app/Contents/Resources") in dirs
+    assert Path("/Applications/TonWallet.app/Contents/MacOS") in dirs
+
+
+def test_candidate_dirs_include_package_and_libs():
+    from ton_wallet_assistant.telegram.loader import candidate_dirs
+
+    dirs = candidate_dirs()
+    package_dir = Path(ton_wallet_assistant.telegram.__file__).resolve().parent
+    assert package_dir in dirs
+    assert package_dir.parent / "lib" in dirs
+    assert package_dir.parent / "libs" in dirs
+    assert len(dirs) == len(set(dirs))  # no duplicates
+
+
+def test_resolve_explicit_path_wins(tmp_path, monkeypatch):
+    from ton_wallet_assistant.telegram.loader import resolve_tdjson_library
+
+    explicit = tmp_path / "libtdjson.so"
+    explicit.write_bytes(b"fake")
+    env_lib = tmp_path / "other" / "libtdjson.so"
+    env_lib.parent.mkdir()
+    env_lib.write_bytes(b"fake")
+    monkeypatch.setenv("TDLIB_PATH", str(env_lib))
+    assert resolve_tdjson_library(explicit) == explicit
+    # env fallback when no explicit path
+    assert resolve_tdjson_library(None, env={"TDLIB_PATH": str(env_lib)}) == env_lib
+
+
+def test_resolve_package_dir_fallback(tmp_path, monkeypatch):
+    import ton_wallet_assistant.telegram as tg_pkg
+    from ton_wallet_assistant.telegram import loader
+
+    fake = tmp_path / "libtdjson.so"
+    fake.write_bytes(b"fake")
+    monkeypatch.delenv("TDLIB_PATH", raising=False)
+    monkeypatch.setattr(loader, "candidate_dirs", lambda: [tmp_path])
+    monkeypatch.setattr("sys.platform", "linux")
+    assert loader.resolve_tdjson_library() == fake
+    assert tg_pkg  # imported
+
+
+def test_searched_paths_and_failure_diagnostics(tmp_path):
+    from ton_wallet_assistant.telegram.loader import searched_paths
+
+    paths = searched_paths(env={})
+    assert "libtdjson.so" in paths  # bare loader fallback present
+    assert any(p.endswith("libtdjson.so") for p in paths)
+
+    # missing library → diagnostics list the searched paths
+    try:
+        TdJson(tmp_path / "definitely-missing-dir" / "libtdjson.so")
+    except TdJsonLoadError as exc:
+        text = str(exc)
+        assert "Searched:" in text
+        assert "libtdjson.so" in text
+        assert str(tmp_path) in text
+    else:
+        pytest.fail("expected TdJsonLoadError")
+
+
+# ------------------------------------------------- config-file resolution
+
+
+def test_config_resolve_file_section(tmp_path):
+    cfg = TelegramConfig.resolve(
+        env={},
+        file_config={"telegram": {"api_id": 555, "api_hash": "file-hash"}},
+        data_dir=tmp_path,
+    )
+    assert cfg.api_id == 555 and cfg.api_hash == "file-hash"
+
+
+def test_config_resolve_env_overrides_file(tmp_path):
+    cfg = TelegramConfig.resolve(
+        env={"TELEGRAM_API_ID": "777", "TELEGRAM_API_HASH": "env-hash"},
+        file_config={"telegram": {"api_id": 555, "api_hash": "file-hash"}},
+        data_dir=tmp_path,
+    )
+    assert cfg.api_id == 777 and cfg.api_hash == "env-hash"
+
+
+def test_config_resolve_tdlib_path_and_test_dc(tmp_path):
+    cfg = TelegramConfig.resolve(
+        env={"TELEGRAM_API_ID": "1", "TELEGRAM_API_HASH": "h"},
+        file_config={"telegram": {"tdlib_path": "/opt/td/libtdjson.so", "test_dc": True}},
+        data_dir=tmp_path,
+    )
+    assert str(cfg.tdlib_path) == "/opt/td/libtdjson.so"
+    assert cfg.use_test_dc is True
 
 
 # --------------------------------------------------------------- demo client

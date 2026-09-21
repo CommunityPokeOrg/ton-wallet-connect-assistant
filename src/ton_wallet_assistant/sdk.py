@@ -502,8 +502,9 @@ class TonWalletSDK:
             else:
                 from .telegram import TdJsonClient, TelegramConfig
 
-                config = TelegramConfig.from_env(
-                    data_dir=Path(self.config.storage_path).parent
+                config = TelegramConfig.resolve(
+                    env=os.environ,
+                    data_dir=Path(self.config.storage_path).parent,
                 )
                 self._telegram = TdJsonClient(config)
         return self._telegram
@@ -516,7 +517,7 @@ class TonWalletSDK:
         try:
             from .telegram import TelegramConfig
 
-            TelegramConfig.from_env()
+            TelegramConfig.resolve(env=os.environ)
         except Exception:
             return False
         return True

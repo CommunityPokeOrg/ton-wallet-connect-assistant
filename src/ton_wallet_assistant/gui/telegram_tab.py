@@ -112,7 +112,7 @@ class TelegramTab(QWidget):
             self.client = DemoTelegramClient()
         else:
             try:
-                config = TelegramConfig.from_env()
+                config = TelegramConfig.resolve()
             except TelegramConfigError as exc:
                 show_error(self, "Telegram not configured", str(exc))
                 return

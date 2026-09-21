@@ -1,0 +1,12 @@
+{
+  "manifest_url": "https://your-domain.example/tonconnect-manifest.json",
+  "network": "mainnet",
+  "demo": false,
+  "telegram": {
+    "api_id": 123456,
+    "api_hash": "YOUR_API_HASH_FROM_MY_TELEGRAM_ORG",
+    "phone": "+15551234567",
+    "tdlib_path": "/path/to/libtdjson.so",
+    "test_dc": false
+  }
+}

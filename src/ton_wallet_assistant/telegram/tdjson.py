@@ -27,13 +27,6 @@ from .config import TelegramConfig
 
 log = logging.getLogger(__name__)
 
-CANDIDATE_LIBRARY_NAMES = (
-    "libtdjson.so",
-    "tdjson.dll",
-    "libtdjson.dylib",
-    "libtdjson.so.0",
-)
-
 _AUTH_STATES = {
     "authorizationStateWaitTdlibParameters": TelegramAuthState.INITIALIZING,
     "authorizationStateWaitPhoneNumber": TelegramAuthState.WAIT_PHONE,
@@ -68,7 +61,17 @@ class TdJson:
 
     @staticmethod
     def _load_library(path: str | Path | None) -> Any:
-        candidates = [str(path)] if path else list(CANDIDATE_LIBRARY_NAMES)
+        from .loader import resolve_tdjson_library, searched_paths
+
+        candidates: list[str] = []
+        resolved = resolve_tdjson_library(path)
+        if resolved is not None:
+            candidates.append(str(resolved))
+        candidates.extend(searched_paths(path))  # bare names → OS loader
+        # de-duplicate while preserving order
+        seen: set[str] = set()
+        candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+
         errors = []
         for name in candidates:
             try:
@@ -76,8 +79,9 @@ class TdJson:
             except OSError as exc:
                 errors.append(f"{name}: {exc}")
         raise TdJsonLoadError(
-            "could not load libtdjson — set TDLIB_PATH to the prebuilt "
-            f"library. Tried: {'; '.join(errors)}"
+            "could not load libtdjson — set TDLIB_PATH or place the prebuilt "
+            "library in a searched directory.\nSearched:\n  "
+            + "\n  ".join(errors)
         )
 
     @staticmethod

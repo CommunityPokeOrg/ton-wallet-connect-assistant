@@ -13,6 +13,12 @@ from .client import (
 )
 from .config import TelegramConfig, TelegramConfigError
 from .demo import DemoTelegramClient
+from .loader import (
+    candidate_dirs,
+    platform_library_name,
+    resolve_tdjson_library,
+    searched_paths,
+)
 from .tdjson import TdJson, TdJsonClient, TdJsonLoadError
 
 __all__ = [
@@ -26,4 +32,8 @@ __all__ = [
     "TelegramConfigError",
     "TelegramError",
     "TelegramUpdate",
+    "candidate_dirs",
+    "platform_library_name",
+    "resolve_tdjson_library",
+    "searched_paths",
 ]

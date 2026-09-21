@@ -66,11 +66,24 @@ used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets
 - **100% Python wrapper**: `telegram/tdjson.py` loads the prebuilt
   `libtdjson` shared library via `ctypes` at runtime — no Cython, no C/C++
   extension, no generated binding layer anywhere in the repo.
-- Real mode requires `TELEGRAM_API_ID` + `TELEGRAM_API_HASH` (from
-  https://my.telegram.org — env only, never hardcoded) and a libtdjson
-  binary (`TDLIB_PATH`, or `libtdjson.so`/`tdjson.dll`/`libtdjson.dylib`
-  on the loader path). Telegram session data is stored under the app's
-  config dir.
+- **Credentials** come from the environment or the config file — never
+  hardcoded and never logged (`api_hash` is masked in all diagnostics).
+  Precedence: `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` env vars →
+  `"telegram"` section of `config.json` (see `assets/config.example.json`
+  — copy it to `~/.config/ton-wallet-connect-assistant/config.json` and
+  fill in your own values from https://my.telegram.org). `TDLIB_PATH`
+  overrides library discovery.
+- **libtdjson discovery** (`telegram/loader.py`) searches, in order:
+  `TDLIB_PATH` / config `tdlib_path` → macOS `.app` bundle dirs
+  (`Contents/Frameworks`, `Resources`, `MacOS`) and PyInstaller
+  `_MEIPASS` → the package directory → `lib/`/`libs`/`native`/`bin` next
+  to the package and in the working directory → the OS loader
+  (`find_library`, then the bare platform filename). The load error lists
+  every path tried.
+- To bundle: drop the prebuilt binary next to the executable —
+  `Contents/Frameworks/libtdjson.dylib` in a `.app`, `tdjson.dll` beside
+  the `.exe`, or `lib/`/`libtdjson.so` next to a checkout — it is found
+  automatically.
 - Demo mode simulates the entire flow offline — phone, code `12345`,
   chats, and message updates — clearly labelled, no network.
 
