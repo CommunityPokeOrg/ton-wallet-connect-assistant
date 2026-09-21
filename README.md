@@ -39,6 +39,27 @@ used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets
   jettons, history, and simulated sends. Nothing persists, nothing touches the
   network, and a **DEMO** badge is shown in the window title and tabs.
 
+### Mobile companion (Pairing tab)
+- **Pairing**: the app runs a tiny local HTTP bridge and shows a pairing URL +
+  QR (`http://<lan-ip>:<port>/p/<token>`). Open it on your phone to get a
+  mobile scanner page — camera scanning (BarcodeDetector API) plus a
+  manual-paste fallback.
+- **Relay**: scanned `tc://` / TonConnect universal links and `ton://transfer`
+  payloads are POSTed to the desktop and queued — nothing executes on the phone.
+- **Approval**: every relayed payload pops a desktop approval dialog showing
+  origin, method, destination, amount/asset, comment, network, and estimated
+  fee. Transfers need the wallet password and are signed by the encrypted
+  keystore; TonConnect links are forwarded to the local wallet app.
+- **Security model**: a fresh 256-bit pairing token per bridge start gates
+  every request (path + `X-Pairing-Token` header); relay POSTs carry a
+  single-use nonce + timestamp (±120 s skew) for replay protection; payloads
+  are strictly validated; requests expire after 5 minutes.
+- **Limitations**: plain HTTP on the LAN — pair only on trusted networks and
+  verify the request details on the desktop before approving. No mTLS or
+  device binding; anyone with the pairing URL on the LAN can submit payloads
+  (they still require desktop approval). In demo mode the bridge binds to
+  loopback only and executes nothing real.
+
 ## Quick start
 
 ```bash
@@ -110,7 +131,19 @@ await sdk.tonconnect.disconnect()
 Low-level builders (offline message construction): `sdk.build_transfer_body(comment)`,
 `sdk.build_jetton_transfer(dest, units, response_addr, comment=…)`.
 
-See `examples/sdk_demo.py` for a full runnable walkthrough.
+Mobile companion pairing:
+
+```python
+url = await sdk.start_pairing()          # http://<lan-ip>:<port>/p/<token>
+async for req in sdk.pairing_requests(): # relayed payloads from the phone
+    if looks_good(req):                  # GUI shows the approval dialog here
+        await sdk.approve_pairing_request(req.request_id, password="…")
+    else:
+        sdk.reject_pairing_request(req.request_id)
+```
+
+See `examples/sdk_demo.py` and `examples/pairing_demo.py` for runnable
+walkthroughs.
 
 Security: mnemonics/keys are never logged; the decrypted mnemonic exists in
 memory only between `unlock_and_derive()` and `lock()`/`close()`. Demo mode
@@ -169,6 +202,11 @@ src/ton_wallet_assistant/
 │   ├── sender.py          # pytoniq lite-client TON + jetton transfer broadcast
 │   └── demo.py            # fabricated offline backend for demo mode
 ├── services/              # TonConnect (dApp-side) backends: real + demo
+├── companion/             # mobile companion: LAN bridge + pairing protocol
+│   ├── protocol.py        # token auth, payload validation, replay protection
+│   ├── server.py          # threaded HTTP bridge (token-gated endpoints)
+│   ├── scanner_page.py    # self-contained mobile QR scanner page
+│   └── manager.py         # request queue + approval state machine
 └── gui/
     ├── async_loop.py      # asyncio thread bridged to Qt signals
     ├── theme.py           # dark Tonkeeper-style stylesheet
@@ -178,8 +216,10 @@ src/ton_wallet_assistant/
     ├── history_tab.py     # transaction list + details dialog
     ├── collectibles_tab.py# NFT grid
     ├── connect_tab.py     # TonConnect wallet-connect flow
+    ├── companion_tab.py   # mobile pairing: bridge control + approvals
     ├── settings_tab.py    # lock, reveal phrase, delete wallet, config info
-    ├── dialogs.py         # password / send-confirm / receive / tx details
+    ├── dialogs.py         # password / send-confirm / receive / tx details /
+                           # relayed-request approval
     └── main_window.py     # session gating + sidebar navigation
 ```
 

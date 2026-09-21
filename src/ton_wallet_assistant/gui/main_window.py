@@ -20,6 +20,7 @@ from ..wallet.account import WalletAccount
 from ..wallet.keystore import Keystore, WrongPasswordError
 from .async_loop import AsyncLoop
 from .collectibles_tab import CollectiblesTab
+from .companion_tab import CompanionTab
 from .connect_tab import ConnectTab
 from .dialogs import show_error
 from .history_tab import HistoryTab
@@ -129,7 +130,7 @@ class MainWindow(QMainWindow):
         self.nav = QListWidget()
         self.nav.setObjectName("sidebar")
         self.nav.setFixedWidth(180)
-        for label in ("Wallet", "History", "Collectibles", "TonConnect", "Settings"):
+        for label in ("Wallet", "History", "Collectibles", "TonConnect", "Pairing", "Settings"):
             self.nav.addItem(label)
         nav = self.nav
 
@@ -139,12 +140,14 @@ class MainWindow(QMainWindow):
         self.history_tab = HistoryTab(session, self.async_loop)
         self.collectibles_tab = CollectiblesTab(session, self.async_loop)
         self.connect_tab = ConnectTab(self.config, self.connect_service, self.async_loop)
+        self.companion_tab = CompanionTab(session, self.async_loop)
         self.settings_tab = SettingsTab(self.config, session, self.async_loop, self._on_wallet_deleted)
         for page in (
             self.wallet_tab,
             self.history_tab,
             self.collectibles_tab,
             self.connect_tab,
+            self.companion_tab,
             self.settings_tab,
         ):
             pages.addWidget(page)
@@ -165,6 +168,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         try:
             if self.session is not None:
+                self.companion_tab.shutdown()
                 self.async_loop.submit(self.session.chain.close())
             self.async_loop.submit(self.connect_service.close())
         finally:

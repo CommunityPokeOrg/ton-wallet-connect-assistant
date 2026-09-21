@@ -41,7 +41,9 @@ def test_demo_mode_full_flow(app):
         connect_tab = window.connect_tab
 
         # Sidebar navigation exposes all pages.
-        assert window.nav.count() == 5
+        assert window.nav.count() == 6
+        # Companion/pairing tab exists and its bridge can start (loopback in demo).
+        assert window.companion_tab.manager.demo
 
         # Wallet tab shows a demo account, balance and demo assets.
         assert "DEMO" in window.windowTitle()

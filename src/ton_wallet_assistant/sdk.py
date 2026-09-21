@@ -32,6 +32,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .companion import PairingManager
+from .companion.protocol import TonConnectLinkDetails, TransferDetails
 from .config import AppConfig
 from .models import ConnectedAccount, ConnectionState, ServiceEvent, WalletOption
 from .wallet.account import (
@@ -218,6 +220,11 @@ class TonWalletSDK:
                 # (the chain backend is still real).
                 service = DemoWalletService(network=network, connect_delay=connect_delay)
         self.tonconnect = TonConnectClient(service)
+
+        # Mobile companion pairing bridge (not bound until start_pairing()).
+        self.pairing = PairingManager(demo=demo, network=network)
+        self.pairing.transfer_handler = self._pairing_transfer
+        self.pairing.connect_handler = self._pairing_connect
 
     # ------------------------------------------------------------ demo
 
@@ -410,6 +417,71 @@ class TonWalletSDK:
                 return j
         raise ChainError(f"no jetton balance for {asset!r} in this wallet")
 
+    # ------------------------------------------------- companion pairing
+
+    async def start_pairing(self, *, host: str = "0.0.0.0", port: int = 0) -> str:
+        """Start the LAN companion bridge and return the pairing URL to show
+        (QR-encode it for the phone). The bridge is token-gated; payloads are
+        validated and queued — nothing is signed or forwarded until
+        ``approve_pairing_request`` is called.
+        """
+        self.pairing.host = host
+        self.pairing.port = port
+        return await self.pairing.start()
+
+    async def stop_pairing(self) -> None:
+        await self.pairing.stop()
+
+    @property
+    def pairing_url(self) -> str:
+        return self.pairing.pairing_url
+
+    def pairing_pending(self) -> list:
+        """Pending (non-expired) requests relayed from the phone."""
+        return self.pairing.pending_requests()
+
+    def pairing_requests(self):
+        """Async iterator yielding each incoming relayed request."""
+        return self.pairing.requests()
+
+    async def approve_pairing_request(self, request_id: str, password: str | None = None) -> str:
+        """Approve a relayed request and execute it.
+
+        ``ton://transfer`` payloads are signed + broadcast via the keystore
+        (unlocks first if ``password`` is given and the wallet is locked).
+        TonConnect universal links are forwarded to the local wallet app
+        (in demo mode they are only recorded). Returns the result text.
+        """
+        if password is not None and not self.demo and self.keystore is not None:
+            if not self.is_unlocked:
+                await self.unlock_and_derive(password)
+        return await self.pairing.approve(request_id)
+
+    def reject_pairing_request(self, request_id: str) -> None:
+        self.pairing.reject(request_id)
+
+    async def _pairing_transfer(self, request) -> str:
+        details: TransferDetails = request.payload
+        if details.jetton:
+            match = next((j for j in await self.get_jettons() if j.address == details.jetton), None)
+            if match is None:
+                raise ChainError(f"no jetton balance for master {details.jetton}")
+            if details.amount_nano is None:
+                raise ChainError("ton:// link does not specify an amount")
+            return await self.send_jetton(match, details.address, details.amount_nano, comment=details.comment)
+        if details.amount_nano is None:
+            raise ChainError("ton:// link does not specify an amount")
+        return await self.send_ton(details.address, details.amount_nano, comment=details.comment)
+
+    async def _pairing_connect(self, request) -> str:
+        details: TonConnectLinkDetails = request.payload
+        if self.demo:
+            return f"demo: universal link for {details.wallet_host} accepted (not opened)"
+        import webbrowser
+
+        webbrowser.open(details.url)
+        return f"forwarded universal link to wallet app ({details.wallet_host})"
+
     # ------------------------------------------------- low-level building
 
     @staticmethod
@@ -437,6 +509,7 @@ class TonWalletSDK:
 
     async def close(self) -> None:
         self.lock()
+        await self.pairing.stop()
         await self._chain.close()
         await self.tonconnect.close()
 
@@ -451,6 +524,7 @@ class TonWalletSDK:
 
 __all__ = [
     "DEFAULT_FORWARD_TON_NANO",
+    "PairingManager",
     "SUPPORTED_VERSIONS",
     "ChainError",
     "ConnectedAccount",

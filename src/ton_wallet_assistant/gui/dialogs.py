@@ -129,6 +129,84 @@ class ReceiveDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class RequestApprovalDialog(QDialog):
+    """Approve/reject a request relayed from the paired mobile companion.
+
+    Shows origin, method, destination, amount/assets, payload/comment,
+    network, and the estimated fee — then collects the wallet password for
+    transfer requests (real mode) before signing.
+    """
+
+    def __init__(self, parent: QWidget | None, request, *, demo: bool, network: str) -> None:
+        from ..companion.protocol import PayloadKind, TransferDetails
+
+        super().__init__(parent)
+        self.setWindowTitle("Approve request")
+        self.setModal(True)
+        self.password = ""
+        self.is_transfer = request.kind is PayloadKind.TON_TRANSFER
+        layout = QVBoxLayout(self)
+
+        if demo:
+            flag = QLabel("DEMO MODE — nothing will be sent on-chain.")
+            flag.setStyleSheet("color:#f0a020; font-weight:bold;")
+            layout.addWidget(flag)
+
+        summary = QFormLayout()
+        summary.addRow("Origin", QLabel(f"{request.origin_ip} (paired mobile device)"))
+        if self.is_transfer:
+            d: TransferDetails = request.payload
+            summary.addRow("Method", QLabel("Send transfer (ton://transfer)"))
+            to_label = QLabel(d.address)
+            to_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            to_label.setWordWrap(True)
+            summary.addRow("To", to_label)
+            if d.jetton:
+                summary.addRow("Asset", QLabel(f"Jetton {d.jetton[:10]}…"))
+                amt = str(d.amount_nano) if d.amount_nano is not None else "—"
+                summary.addRow("Amount", QLabel(f"{amt} (raw units)"))
+                fee = "0 (demo)" if demo else "≤ 0.12 TON (incl. ~0.1 TON attached)"
+            else:
+                summary.addRow("Asset", QLabel("TON"))
+                summary.addRow("Amount", QLabel(d.amount_text))
+                fee = "0 (demo)" if demo else "≤ 0.02 TON"
+            if d.comment:
+                summary.addRow("Comment", QLabel(d.comment))
+        else:
+            d = request.payload
+            summary.addRow("Method", QLabel("TonConnect connect (open in wallet app)"))
+            summary.addRow("Wallet link", QLabel(d.wallet_host))
+            summary.addRow("Session", QLabel(d.session_id[:16] + "…"))
+            items = ", ".join(d.items) or "ton_addr"
+            summary.addRow("Requested", QLabel(items))
+            fee = "—"
+        summary.addRow("Network", QLabel(network))
+        summary.addRow("Est. fee", QLabel(fee))
+        layout.addLayout(summary)
+
+        if self.is_transfer and not demo:
+            layout.addWidget(QLabel("Wallet password to sign:"))
+            self.password_edit = QLineEdit()
+            self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+            layout.addWidget(self.password_edit)
+        else:
+            self.password_edit = None
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Approve")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Reject")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def accept(self) -> None:
+        if self.password_edit is not None:
+            self.password = self.password_edit.text()
+        super().accept()
+
+
 class TxDetailsDialog(QDialog):
     """Read-only transaction detail view with explorer link."""
 
