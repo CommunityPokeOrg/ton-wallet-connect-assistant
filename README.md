@@ -1,7 +1,7 @@
 # TON Wallet Connect Assistant
 
 A Tonkeeper-style **desktop TON wallet** in Python (PySide6/Qt) with a built-in
-[TonConnect](https://docs.ton.org/applications/ton-connect/) connection assistant — the link flow
+[TonConnect](https://docs.ton.org/applications/ton-connect/get-started) connection assistant — the link flow
 used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets.
 
 ## Features
@@ -11,13 +11,21 @@ used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets
   v5r1 contracts supported).
 - **Encrypted keystore** — the mnemonic is stored only on this machine,
   encrypted with your password (argon2id → NaCl SecretBox, file mode `0600`).
-- **Balance & assets** — TON balance and jetton balances via tonapi.io.
-- **Send** TON transfers signed locally and broadcast over the lite-client
-  protocol (pytoniq) — no API key required. Sends require the wallet password.
+- **Balance & assets** — TON balance and multi-asset jetton list via
+  tonapi.io, each with its own decimals and icon avatar.
+- **Send** TON and jetton (TEP-74) transfers signed locally and broadcast over
+  the lite-client protocol (pytoniq) — no API key required. The send dialog
+  has an asset picker, balance-aware validation, and comment support; sends
+  require the wallet password.
 - **Receive** — address + `ton://transfer/…` QR code.
-- **Transaction history** — incoming/outgoing TON and jetton transfers.
+- **Collectibles** — NFT grid via tonapi.io (`/nfts`).
+- **Transaction history** — incoming/outgoing TON and jetton transfers on a
+  dedicated page; clicking a record opens full details (sender/recipient,
+  amount, fee, comment, event hash, Tonviewer link).
 - **Settings** — lock now, reveal recovery phrase (password required), delete
   wallet (password required), config paths.
+- **Tonkeeper-style dark UI** — sidebar navigation (Wallet / History /
+  Collectibles / TonConnect / Settings) with a dark theme.
 
 ### TonConnect tab
 - Connect external wallets (Telegram Wallet, Tonkeeper, Tonhub, …) to the app
@@ -84,8 +92,7 @@ in demo mode.
 
 Official references:
 
-- [TON Connect documentation](https://docs.ton.org/applications/ton-connect/)
-  ([getting started](https://docs.ton.org/applications/ton-connect/get-started))
+- [TON Connect documentation](https://docs.ton.org/applications/ton-connect/get-started)
 - [Protocol spec / repository](https://github.com/ton-blockchain/ton-connect)
 - [SDK reference](https://ton-connect.github.io/sdk/index.html)
 
@@ -102,19 +109,24 @@ src/ton_wallet_assistant/
 ├── wallet/
 │   ├── account.py         # mnemonic validation, keypair, v4r2/v5r1 address derivation
 │   ├── keystore.py        # argon2id + SecretBox encrypted mnemonic file
-│   ├── chain.py           # ChainClient interface, TxRecord, JettonBalance, amount utils
-│   ├── tonapi.py          # tonapi.io reads: balance, jettons, history
-│   ├── sender.py          # pytoniq lite-client transfer broadcast
+│   ├── chain.py           # ChainClient interface, TxRecord, JettonBalance, Nft, amount utils
+│   ├── tonapi.py          # tonapi.io reads: balance, jettons, NFTs, history
+│   ├── jettons.py         # TEP-74 jetton transfer body + amount conversion
+│   ├── sender.py          # pytoniq lite-client TON + jetton transfer broadcast
 │   └── demo.py            # fabricated offline backend for demo mode
 ├── services/              # TonConnect (dApp-side) backends: real + demo
 └── gui/
     ├── async_loop.py      # asyncio thread bridged to Qt signals
+    ├── theme.py           # dark Tonkeeper-style stylesheet
+    ├── icons.py           # deterministic letter-avatar asset/NFT icons
     ├── onboarding.py      # create / import / unlock / demo screens
-    ├── wallet_tab.py      # balance, assets, send/receive, history
+    ├── wallet_tab.py      # balance, assets, send/receive (asset picker)
+    ├── history_tab.py     # transaction list + details dialog
+    ├── collectibles_tab.py# NFT grid
     ├── connect_tab.py     # TonConnect wallet-connect flow
     ├── settings_tab.py    # lock, reveal phrase, delete wallet, config info
-    ├── dialogs.py         # password / send-confirm / receive / seed dialogs
-    └── main_window.py     # session gating + tab container
+    ├── dialogs.py         # password / send-confirm / receive / tx details
+    └── main_window.py     # session gating + sidebar navigation
 ```
 
 The GUI runs wallet and chain I/O on a dedicated asyncio thread and marshals
@@ -142,14 +154,15 @@ QT_QPA_PLATFORM=offscreen pytest -v
 Coverage: raw⇄friendly address vectors (checked against pytoniq-core), mnemonic
 validation and deterministic address derivation (v4r2/v5r1, mainnet/testnet),
 keystore encryption round-trip/permissions/wrong-password, amount parsing,
-tonapi action parsing, demo chain client, the TonConnect demo cycle, and a
-headless (offscreen) end-to-end GUI flow. CI runs lint + tests on Linux,
-Windows, and macOS.
+TEP-74 jetton transfer body construction, tonapi action parsing, demo chain
+client (TON + jetton sends, NFTs), the TonConnect demo cycle, and a headless
+(offscreen) end-to-end GUI flow across all pages. CI runs lint + tests on
+Linux, Windows, and macOS.
 
 ## Notes & limitations
 
-- The wallet targets personal TON use: TON transfers and jetton *viewing* are
-  implemented; jetton/NFT *transfers*, multisig, and staking are not (yet).
+- Jetton sends are implemented (TEP-74 through the owner's jetton wallet);
+  NFT transfers, multisig, and staking are not (yet).
 - TonConnect here is the dApp-side flow (connect an external wallet to this
   app). Acting as a TonConnect *wallet* for third-party dApps is future work.
 - On air-gapped or restricted networks, real mode needs outbound access to
