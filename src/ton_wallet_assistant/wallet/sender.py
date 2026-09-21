@@ -1,4 +1,4 @@
-"""Broadcast TON transfers through the lite-client protocol (pytoniq).
+"""Broadcast TON and jetton transfers through the lite-client protocol (pytoniq).
 
 The transfer is signed locally with the wallet's private key and sent to TON
 lite-servers — the same mechanism desktop/mobile wallets use. The private key
@@ -12,7 +12,7 @@ from .chain import ChainError
 
 
 class LiteSender:
-    """Sends TON transfers via ``pytoniq`` lite-client (no API key needed)."""
+    """Sends TON/jetton transfers via ``pytoniq`` lite-client (no API key needed)."""
 
     def __init__(self, network: str = "mainnet") -> None:
         self.network = network
@@ -36,6 +36,19 @@ class LiteSender:
         self._client = client
         return client
 
+    async def _wallet_for(self, client, private_key: bytes, wallet_version: str):
+        if wallet_version == "v5r1":
+            from pytoniq.contract.wallets import WalletV5R1 as WalletCls
+
+            return await WalletCls.from_private_key(
+                provider=client,
+                private_key=private_key,
+                network_global_id=-3 if self.network == "testnet" else -239,
+            )
+        from pytoniq.contract.wallets import WalletV4R2 as WalletCls
+
+        return await WalletCls.from_private_key(provider=client, private_key=private_key)
+
     async def send(
         self,
         mnemonic: list[str],
@@ -53,19 +66,9 @@ class LiteSender:
 
         client = await self._ensure_client()
         private_key = private_key_from_mnemonic(mnemonic)
+        wallet = None
         try:
-            if wallet_version == "v5r1":
-                from pytoniq.contract.wallets import WalletV5R1 as WalletCls
-
-                wallet = await WalletCls.from_private_key(
-                    provider=client,
-                    private_key=private_key,
-                    network_global_id=-3 if self.network == "testnet" else -239,
-                )
-            else:
-                from pytoniq.contract.wallets import WalletV4R2 as WalletCls
-
-                wallet = await WalletCls.from_private_key(provider=client, private_key=private_key)
+            wallet = await self._wallet_for(client, private_key, wallet_version)
 
             body = None
             if comment.strip():
@@ -80,8 +83,52 @@ class LiteSender:
             raise ChainError(f"Transfer failed: {exc}") from exc
         finally:
             private_key = b"\x00" * len(private_key)
-        # pytoniq's raw_transfer returns the sent message hash context-dependent;
-        # surface a best-effort identifier the UI can display.
+        return getattr(wallet, "_last_tx_hash", "") or "broadcast"
+
+    async def send_jetton(
+        self,
+        mnemonic: list[str],
+        wallet_version: str,
+        jetton,
+        destination: str,
+        amount_units: int,
+        comment: str = "",
+    ) -> str:
+        """TEP-74 jetton transfer: sends an internal message to the owner's
+        jetton wallet (``jetton.wallet_address``) carrying ~0.05 TON for the
+        notification plus transfer fees.
+        """
+        from ..address_utils import is_friendly_address, is_raw_address
+        from .jettons import build_jetton_transfer_body
+
+        if not (is_friendly_address(destination) or is_raw_address(destination)):
+            raise ChainError("Destination is not a valid TON address")
+        if amount_units <= 0:
+            raise ChainError("Jetton amount must be positive")
+        if not jetton.wallet_address:
+            raise ChainError(f"Jetton wallet address unknown for {jetton.symbol}")
+
+        client = await self._ensure_client()
+        private_key = private_key_from_mnemonic(mnemonic)
+        wallet = None
+        try:
+            wallet = await self._wallet_for(client, private_key, wallet_version)
+            own_address = wallet.address.to_str(is_user_friendly=True, is_bounceable=False)
+            body = build_jetton_transfer_body(
+                destination=destination,
+                amount_units=amount_units,
+                response_address=own_address,
+                forward_ton_amount=50_000_000,  # 0.05 TON notification
+                comment=comment,
+            )
+            # ~0.1 TON total: notification amount + contract fees
+            await wallet.transfer(destination=jetton.wallet_address, amount=100_000_000, body=body)
+        except ChainError:
+            raise
+        except Exception as exc:
+            raise ChainError(f"Jetton transfer failed: {exc}") from exc
+        finally:
+            private_key = b"\x00" * len(private_key)
         return getattr(wallet, "_last_tx_hash", "") or "broadcast"
 
     async def close(self) -> None:

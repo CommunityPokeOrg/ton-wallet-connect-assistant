@@ -33,6 +33,12 @@ def format_ton(nano: int | float) -> str:
     return text if "." in text or value == 0 else text
 
 
+def format_units(raw: int, decimals: int, max_frac: int = 4) -> str:
+    """Format a raw asset amount using its decimals."""
+    text = f"{raw / 10**decimals:,.{max_frac}f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
 @dataclass(frozen=True)
 class JettonBalance:
     symbol: str
@@ -40,6 +46,18 @@ class JettonBalance:
     balance: str  # human-readable, already decimal-adjusted
     address: str  # jetton master address
     image_url: str = ""
+    decimals: int = 9
+    raw_balance: int = 0  # raw units; 0 means unknown
+    wallet_address: str = ""  # owner's jetton wallet (needed to send)
+
+
+@dataclass(frozen=True)
+class Nft:
+    name: str
+    address: str
+    collection: str = ""
+    image_url: str = ""
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -47,15 +65,23 @@ class TxRecord:
     tx_hash: str
     timestamp: int
     direction: str  # "in" | "out"
-    amount_nano: int
+    amount_nano: int  # raw units of `asset` (nanotons for TON)
     counterparty: str  # friendly or raw address
     comment: str = ""
     status: str = "confirmed"  # confirmed | pending | failed
     asset: str = "TON"
+    asset_decimals: int = 9
+    fee_nano: int | None = None  # network fee, when known
+    sender: str = ""  # friendly sender address (for details view)
+    recipient: str = ""  # friendly recipient address
 
     @property
     def amount_ton(self) -> float:
         return nano_to_ton(self.amount_nano)
+
+    @property
+    def formatted_amount(self) -> str:
+        return format_units(self.amount_nano, self.asset_decimals)
 
 
 class ChainError(Exception):
@@ -73,6 +99,10 @@ class ChainClient(abc.ABC):
     async def get_jettons(self, address: str) -> list[JettonBalance]:
         """Return jetton balances for the account."""
 
+    async def get_nfts(self, address: str) -> list[Nft]:
+        """Return NFTs owned by the account (empty by default)."""
+        return []
+
     @abc.abstractmethod
     async def get_history(self, address: str, limit: int = 25) -> list[TxRecord]:
         """Recent transfer history, newest first."""
@@ -87,6 +117,18 @@ class ChainClient(abc.ABC):
         comment: str = "",
     ) -> str:
         """Sign and broadcast a TON transfer. Returns the tx hash."""
+
+    async def send_jetton(
+        self,
+        mnemonic: list[str],
+        wallet_version: str,
+        jetton: JettonBalance,
+        destination: str,
+        amount_units: int,
+        comment: str = "",
+    ) -> str:
+        """Sign and broadcast a jetton transfer. Returns the tx hash."""
+        raise ChainError("Jetton transfers not supported by this backend")
 
     @abc.abstractmethod
     async def close(self) -> None: ...

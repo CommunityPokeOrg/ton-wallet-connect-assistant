@@ -1,10 +1,16 @@
-"""Main window: onboarding gate -> tabbed wallet UI."""
+"""Main window: onboarding gate -> sidebar-navigated wallet UI."""
 
 from __future__ import annotations
 
 import os
 
-from PySide6.QtWidgets import QMainWindow, QTabWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QListWidget,
+    QMainWindow,
+    QStackedWidget,
+    QWidget,
+)
 
 from ..config import AppConfig
 from ..services.base import WalletService
@@ -13,8 +19,10 @@ from ..wallet import DemoChainClient, TonApiClient, derive_account, generate_mne
 from ..wallet.account import WalletAccount
 from ..wallet.keystore import Keystore, WrongPasswordError
 from .async_loop import AsyncLoop
+from .collectibles_tab import CollectiblesTab
 from .connect_tab import ConnectTab
 from .dialogs import show_error
+from .history_tab import HistoryTab
 from .onboarding import OnboardingWidget
 from .settings_tab import SettingsTab
 from .wallet_tab import WalletTab
@@ -112,14 +120,41 @@ class MainWindow(QMainWindow):
 
     def _open_session(self, session: WalletSession) -> None:
         self.session = session
-        tabs = QTabWidget()
+
+        root = QWidget()
+        layout = QHBoxLayout(root)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.nav = QListWidget()
+        self.nav.setObjectName("sidebar")
+        self.nav.setFixedWidth(180)
+        for label in ("Wallet", "History", "Collectibles", "TonConnect", "Settings"):
+            self.nav.addItem(label)
+        nav = self.nav
+
+        self.pages = QStackedWidget()
+        pages = self.pages
         self.wallet_tab = WalletTab(session, self.async_loop)
+        self.history_tab = HistoryTab(session, self.async_loop)
+        self.collectibles_tab = CollectiblesTab(session, self.async_loop)
         self.connect_tab = ConnectTab(self.config, self.connect_service, self.async_loop)
         self.settings_tab = SettingsTab(self.config, session, self.async_loop, self._on_wallet_deleted)
-        tabs.addTab(self.wallet_tab, "Wallet")
-        tabs.addTab(self.connect_tab, "TonConnect")
-        tabs.addTab(self.settings_tab, "Settings")
-        self.setCentralWidget(tabs)
+        for page in (
+            self.wallet_tab,
+            self.history_tab,
+            self.collectibles_tab,
+            self.connect_tab,
+            self.settings_tab,
+        ):
+            pages.addWidget(page)
+
+        nav.currentRowChanged.connect(pages.setCurrentIndex)
+        nav.setCurrentRow(0)
+
+        layout.addWidget(nav)
+        layout.addWidget(pages, 1)
+        self.setCentralWidget(root)
         suffix = " [DEMO]" if session.demo else ""
         self.setWindowTitle(f"TON Wallet — {session.account.short_address}{suffix}")
 

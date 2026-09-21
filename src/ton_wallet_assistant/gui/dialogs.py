@@ -129,6 +129,55 @@ class ReceiveDialog(QDialog):
         layout.addWidget(buttons)
 
 
+class TxDetailsDialog(QDialog):
+    """Read-only transaction detail view with explorer link."""
+
+    def __init__(self, parent: QWidget | None, tx, network: str = "mainnet") -> None:
+        super().__init__(parent)
+        from datetime import datetime
+
+        from ..wallet.chain import format_ton
+
+        self.setWindowTitle("Transaction details")
+        self.setModal(True)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        def row(label: str, value: str) -> None:
+            lbl = QLabel(value or "—")
+            lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            lbl.setWordWrap(True)
+            form.addRow(label, lbl)
+
+        sign = "+" if tx.direction == "in" else "-"
+        row("Amount", f"{sign}{tx.formatted_amount} {tx.asset}")
+        row("Direction", "Received" if tx.direction == "in" else "Sent")
+        row("Status", tx.status)
+        if tx.timestamp:
+            row("Date", datetime.fromtimestamp(tx.timestamp).strftime("%Y-%m-%d %H:%M:%S"))
+        if tx.sender:
+            row("From", tx.sender)
+        if tx.recipient:
+            row("To", tx.recipient)
+        elif tx.counterparty:
+            row("Counterparty", tx.counterparty)
+        if tx.fee_nano is not None:
+            row("Fee", f"{format_ton(tx.fee_nano)} TON")
+        if tx.comment:
+            row("Comment", tx.comment)
+        row("Event", tx.tx_hash)
+        layout.addLayout(form)
+
+        if tx.tx_hash and tx.tx_hash != "broadcast":
+            host = "testnet.tonviewer.com" if network == "testnet" else "tonviewer.com"
+            view_btn = QPushButton("View in Tonviewer")
+            view_btn.clicked.connect(lambda: __import__("webbrowser").open(f"https://{host}/transaction/{tx.tx_hash}"))
+            layout.addWidget(view_btn)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 class SeedRevealDialog(QDialog):
     """Displays the recovery phrase after the keystore has been unlocked."""
 

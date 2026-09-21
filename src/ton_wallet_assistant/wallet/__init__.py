@@ -12,8 +12,19 @@ from .account import (
     private_key_from_mnemonic,
     validate_mnemonic,
 )
-from .chain import ChainClient, ChainError, JettonBalance, TxRecord, format_ton, nano_to_ton, ton_to_nano
+from .chain import (
+    ChainClient,
+    ChainError,
+    JettonBalance,
+    Nft,
+    TxRecord,
+    format_ton,
+    format_units,
+    nano_to_ton,
+    ton_to_nano,
+)
 from .demo import DemoChainClient
+from .jettons import build_jetton_transfer_body, jetton_amount_to_units
 from .keystore import Keystore, KeystoreError, WrongPasswordError
 from .tonapi import TonApiClient
 
@@ -26,12 +37,16 @@ __all__ = [
     "JettonBalance",
     "Keystore",
     "KeystoreError",
+    "Nft",
     "TonApiClient",
     "TxRecord",
     "WalletAccount",
     "WrongPasswordError",
+    "build_jetton_transfer_body",
     "derive_account",
     "format_ton",
+    "format_units",
+    "jetton_amount_to_units",
     "generate_mnemonic",
     "keypair_from_mnemonic",
     "mnemonic_is_valid",

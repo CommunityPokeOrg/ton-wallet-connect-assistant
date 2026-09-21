@@ -1,10 +1,10 @@
-"""Read-side chain backend: tonapi.io REST (balances, jettons, history)."""
+"""Read-side chain backend: tonapi.io REST (balances, jettons, NFTs, history)."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from .chain import ChainClient, ChainError, JettonBalance, TxRecord
+from .chain import ChainClient, ChainError, JettonBalance, Nft, TxRecord
 
 MAINNET_API = "https://tonapi.io"
 TESTNET_API = "https://testnet.tonapi.io"
@@ -49,15 +49,41 @@ class TonApiClient(ChainClient):
             decimals = int(jetton.get("decimals", 9))
             raw_balance = int(item.get("balance", "0"))
             meta = jetton.get("metadata") or {}
+            wallet = item.get("wallet_address")
             out.append(
                 JettonBalance(
                     symbol=jetton.get("symbol") or meta.get("symbol") or "?",
                     name=jetton.get("name") or meta.get("name") or "Jetton",
                     balance=f"{raw_balance / 10**decimals:,.4f}".rstrip("0").rstrip("."),
-                    address=item.get("wallet_address", {}).get("address", "")
-                    if isinstance(item.get("wallet_address"), dict)
-                    else jetton.get("address", ""),
+                    address=jetton.get("address", ""),
                     image_url=jetton.get("image") or meta.get("image") or "",
+                    decimals=decimals,
+                    raw_balance=raw_balance,
+                    wallet_address=wallet.get("address", "") if isinstance(wallet, dict) else "",
+                )
+            )
+        return out
+
+    async def get_nfts(self, address: str) -> list[Nft]:
+        data = await self._get(
+            f"/v2/accounts/{address}/nfts",
+            {"limit": 100, "indirect_ownership": "false"},
+        )
+        out = []
+        for item in data.get("nft_items", []):
+            meta = item.get("metadata") or {}
+            collection = item.get("collection") or {}
+            previews = item.get("previews") or []
+            image_url = meta.get("image") or (
+                previews[-1].get("url", "") if previews else ""
+            )
+            out.append(
+                Nft(
+                    name=meta.get("name") or "Unnamed NFT",
+                    address=item.get("address", ""),
+                    collection=collection.get("name") or collection.get("address", "") or "",
+                    image_url=image_url,
+                    description=meta.get("description") or "",
                 )
             )
         return out
@@ -69,18 +95,27 @@ class TonApiClient(ChainClient):
         )
         records: list[TxRecord] = []
         for event in data.get("events", []):
+            fee = event.get("extra")
             for action in event.get("actions", []):
-                rec = _action_to_record(action, address, event.get("event_id", ""))
+                rec = _action_to_record(action, address, event.get("event_id", ""), fee)
                 if rec is not None:
                     records.append(rec)
         return records[:limit]
 
     async def send(self, mnemonic, wallet_version, destination, amount_nano, comment="") -> str:
+        return await self._get_sender().send(mnemonic, wallet_version, destination, amount_nano, comment)
+
+    async def send_jetton(self, mnemonic, wallet_version, jetton, destination, amount_units, comment="") -> str:
+        return await self._get_sender().send_jetton(
+            mnemonic, wallet_version, jetton, destination, amount_units, comment
+        )
+
+    def _get_sender(self):
         if self._sender is None:
             from .sender import LiteSender
 
             self._sender = LiteSender(self.network)
-        return await self._sender.send(mnemonic, wallet_version, destination, amount_nano, comment)
+        return self._sender
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -101,10 +136,16 @@ def _friendly(addr: Any) -> str:
         return str(addr)
 
 
-def _action_to_record(action: dict, own: str, event_id: str) -> TxRecord | None:
+def _action_to_record(action: dict, own: str, event_id: str, event_fee=None) -> TxRecord | None:
     atype = action.get("type")
     simple = action.get("simple_preview") or {}
     own_friendly = _friendly(own)
+    fee = None
+    if event_fee is not None:
+        try:
+            fee = int(event_fee)
+        except (TypeError, ValueError):
+            fee = None
 
     if atype == "TonTransfer":
         t = action.get("TonTransfer", {})
@@ -119,6 +160,9 @@ def _action_to_record(action: dict, own: str, event_id: str) -> TxRecord | None:
             counterparty=sender if direction == "in" else recipient,
             comment=t.get("comment") or "",
             status="confirmed" if action.get("status", "ok") == "ok" else "failed",
+            fee_nano=fee,
+            sender=sender,
+            recipient=recipient,
         )
     if atype == "JettonTransfer":
         t = action.get("JettonTransfer", {})
@@ -128,17 +172,21 @@ def _action_to_record(action: dict, own: str, event_id: str) -> TxRecord | None:
         jetton = t.get("jetton") or {}
         decimals = int(jetton.get("decimals", 9))
         try:
-            amount = float(t.get("amount", "0")) * 10**decimals
+            amount = int(float(t.get("amount", "0")) * 10**decimals)
         except (TypeError, ValueError):
             amount = 0
         return TxRecord(
             tx_hash=event_id,
             timestamp=int(action.get("timestamp") or simple.get("timestamp") or 0),
             direction=direction,
-            amount_nano=int(amount),
+            amount_nano=amount,
             counterparty=sender if direction == "in" else recipient,
             comment=t.get("comment") or "",
             status="confirmed" if action.get("status", "ok") == "ok" else "failed",
             asset=jetton.get("symbol") or "JETTON",
+            asset_decimals=decimals,
+            fee_nano=fee,
+            sender=sender,
+            recipient=recipient,
         )
     return None

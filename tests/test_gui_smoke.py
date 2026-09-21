@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication, QTabWidget
+from PySide6.QtWidgets import QApplication, QStackedWidget
 
 from ton_wallet_assistant.config import AppConfig
 from ton_wallet_assistant.gui import MainWindow
@@ -34,16 +34,24 @@ def test_demo_mode_full_flow(app):
     window.show()
     try:
         # Demo session builds asynchronously on the io loop.
-        assert _pump_until(lambda: isinstance(window.centralWidget(), QTabWidget))
+        assert _pump_until(lambda: isinstance(getattr(window, "pages", None), QStackedWidget))
         wallet_tab = window.wallet_tab
+        history_tab = window.history_tab
+        collectibles_tab = window.collectibles_tab
         connect_tab = window.connect_tab
 
-        # Wallet tab shows a demo account, balance and demo history.
+        # Sidebar navigation exposes all pages.
+        assert window.nav.count() == 5
+
+        # Wallet tab shows a demo account, balance and demo assets.
         assert "DEMO" in window.windowTitle()
         assert _pump_until(lambda: wallet_tab.balance_label.text().endswith("TON"))
         assert wallet_tab.balance_label.text().startswith("42")
-        assert _pump_until(lambda: wallet_tab.history_list.count() == 8)
-        assert wallet_tab.assets_list.count() == 3  # TON + 2 demo jettons
+        assert _pump_until(lambda: wallet_tab.assets_list.count() == 3)  # TON + 2 demo jettons
+
+        # History tab shows the demo records; collectibles shows demo NFTs.
+        assert _pump_until(lambda: history_tab.list.count() == 8)
+        assert _pump_until(lambda: collectibles_tab.grid.count() == 3)
 
         # TonConnect tab demo flow still works.
         assert _pump_until(lambda: connect_tab.wallet_list.count() == 1)
@@ -57,10 +65,11 @@ def test_demo_mode_full_flow(app):
 
         # Demo send: form -> confirm dialog -> fake broadcast.
         # (Dialogs are modal; drive the internals the same way the buttons do.)
-        wallet_tab._do_send([], "UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ", 1_000_000_000, "test")
-        assert _pump_until(lambda: wallet_tab.history_list.count() == 9)
-        assert "Transaction sent" in wallet_tab.status_label.text()
-        assert "[pending]" in wallet_tab.history_list.item(0).text()
+        wallet_tab._do_send([], "UQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJKZ", 1_000_000_000, "test", None)
+        assert _pump_until(lambda: "Transaction sent" in wallet_tab.status_label.text())
+        history_tab.refresh()
+        assert _pump_until(lambda: history_tab.list.count() == 9)
+        assert "[pending]" in history_tab.list.item(0).text()
     finally:
         window.close()
         window.async_loop.stop()
@@ -76,7 +85,7 @@ def test_onboarding_shown_when_no_keystore(app, tmp_path, monkeypatch):
     window.show()
     try:
         # No keystore -> onboarding welcome page visible.
-        assert not isinstance(window.centralWidget(), QTabWidget)
+        assert window.session is None
         assert window.onboarding.stack.currentIndex() == window.onboarding.PAGE_WELCOME
         # Generate -> backup page shows 24 words.
         window.onboarding._start_create()
