@@ -1,6 +1,7 @@
 # TON Wallet Connect Assistant
 
-A Tonkeeper-style **desktop TON wallet** in Python (PySide6/Qt) with a built-in
+A Tonkeeper-style **desktop TON wallet** in Python (PySide6/Qt) plus a headless
+**Python SDK**, with a built-in
 [TonConnect](https://docs.ton.org/applications/ton-connect/get-started) connection assistant — the link flow
 used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets.
 
@@ -43,7 +44,7 @@ used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -e .
+pip install -e ".[gui]"    # desktop app; plain `pip install -e .` = SDK only
 ton-wallet-assistant        # or: python -m ton_wallet_assistant
 ```
 
@@ -63,6 +64,58 @@ On later launches, enter the password to unlock the encrypted keystore.
 
 Demo mode is always visibly labelled. Start it with `--demo`, or from the
 onboarding screen.
+
+## Python SDK
+
+The wallet core is usable headlessly — no Qt/PySide6 required (it's an optional
+`gui` extra). `TonWalletSDK` covers wallet create/import/keystore management,
+balances, TON + jetton (TEP-74) sends, NFTs, history, and the TonConnect
+session lifecycle:
+
+```python
+import asyncio
+from ton_wallet_assistant.sdk import TonWalletSDK
+
+async def main():
+    sdk = await TonWalletSDK.demo()          # fully offline — fake data only
+    print(sdk.account.friendly_bounceable)
+    print(await sdk.get_balance_ton(), "TON")
+    await sdk.send_ton("UQAAAA…", "1.5")      # simulated in demo mode
+    await sdk.close()
+
+asyncio.run(main())
+```
+
+Real-mode sketch (writes the encrypted keystore to `~/.config/…` or `data_dir=`):
+
+```python
+sdk = TonWalletSDK(network="mainnet", manifest_url="https://example.com/manifest.json")
+words, account = await sdk.create_wallet(password="…")   # back up `words` once
+await sdk.unlock_and_derive("…")                          # later sessions
+await sdk.send_ton(destination, "0.1", comment="hi")
+await sdk.send_jetton("USDT", destination, "25")        # TEP-74 via jetton wallet
+await sdk.send_jetton(jetton_balance_obj, destination, "25")  # or pass the object
+await sdk.close()
+```
+
+TonConnect (dApp side):
+
+```python
+wallets = await sdk.tonconnect.list_wallets()
+link = await sdk.tonconnect.request_connection(wallets[0])  # show as QR/link
+account = await sdk.tonconnect.wait_for_connection()        # pending → connected
+await sdk.tonconnect.disconnect()
+```
+
+Low-level builders (offline message construction): `sdk.build_transfer_body(comment)`,
+`sdk.build_jetton_transfer(dest, units, response_addr, comment=…)`.
+
+See `examples/sdk_demo.py` for a full runnable walkthrough.
+
+Security: mnemonics/keys are never logged; the decrypted mnemonic exists in
+memory only between `unlock_and_derive()` and `lock()`/`close()`. Demo mode
+(`TonWalletSDK.demo()` / `demo=True`) never touches the network and is always
+clearly labelled.
 
 ## Real-mode configuration
 
@@ -106,6 +159,7 @@ src/ton_wallet_assistant/
 ├── models.py              # TonConnect event models
 ├── address_utils.py       # raw ⇄ friendly TON address conversion (CRC16/base64url)
 ├── qr.py                  # link/address → PNG QR
+├── sdk.py                 # TonWalletSDK: headless wallet + TonConnect facade
 ├── wallet/
 │   ├── account.py         # mnemonic validation, keypair, v4r2/v5r1 address derivation
 │   ├── keystore.py        # argon2id + SecretBox encrypted mnemonic file
@@ -155,9 +209,10 @@ Coverage: raw⇄friendly address vectors (checked against pytoniq-core), mnemoni
 validation and deterministic address derivation (v4r2/v5r1, mainnet/testnet),
 keystore encryption round-trip/permissions/wrong-password, amount parsing,
 TEP-74 jetton transfer body construction, tonapi action parsing, demo chain
-client (TON + jetton sends, NFTs), the TonConnect demo cycle, and a headless
-(offscreen) end-to-end GUI flow across all pages. CI runs lint + tests on
-Linux, Windows, and macOS.
+client (TON + jetton sends, NFTs), SDK public-API tests (importable without
+PySide6, demo wallet flow, keystore create/unlock/send, TonConnect demo
+lifecycle), the TonConnect demo cycle, and a headless (offscreen) end-to-end
+GUI flow across all pages. CI runs lint + tests on Linux, Windows, and macOS.
 
 ## Notes & limitations
 

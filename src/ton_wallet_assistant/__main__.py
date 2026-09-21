@@ -35,10 +35,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     from .config import AppConfig
-    from .gui import run_app
     from .services import DemoWalletService, TonConnectService
 
     args = build_parser().parse_args(argv)
+    try:
+        from .gui import run_app  # noqa: F811
+    except ImportError:
+        print(
+            "The desktop app needs the GUI dependencies. Install with: "
+            'pip install "ton-wallet-connect-assistant[gui]"',
+            file=sys.stderr,
+        )
+        return 2
     config = AppConfig.resolve(
         manifest_url=args.manifest_url,
         demo=True if args.demo else None,
