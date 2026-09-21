@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import threading
 import urllib.parse
-import urllib.request
 import webbrowser
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -67,7 +66,7 @@ class TelegramMiniAppBridge:
         if not username or any(ch in username for ch in "/?#"):
             raise ValueError("username must be a Telegram handle")
         url = f"https://t.me/{username}"
-        return f"{url}?startapp={urllib.parse.quote(startapp, safe='') }" if startapp else url
+        return f"{url}?startapp={urllib.parse.quote(startapp, safe='')}" if startapp else url
 
     @staticmethod
     def validate_web_url(url: str) -> str:
