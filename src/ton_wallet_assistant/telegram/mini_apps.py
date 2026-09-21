@@ -24,7 +24,7 @@ import urllib.parse
 import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 
 #: Well-known TON/Telegram mini apps shown in the tab's preset list.
 POPULAR_MINI_APPS: tuple[tuple[str, str], ...] = (
@@ -537,11 +537,94 @@ def build_init_data(
     return "&".join(fields), unsafe
 
 
+# ------------------------------------------------- bundled demo harness
+#
+# Demo mode never points the webview at real remote targets like
+# https://t.me/wallet — that page immediately tries to bounce to
+# ``tg://resolve?...`` (which the view must refuse) and needs a real
+# Telegram session anyway. Instead demo resolution serves a bundled,
+# self-contained Mini App harness over loopback HTTP. Loopback keeps the
+# page on a real origin (fetch/XHR work, schemes classify as 'web'), needs
+# no file:// scheme exceptions, and works fully offline.
+
+_DEMO_ASSET = "demo_assets/demo_app.html"
+_demo_server: ThreadingHTTPServer | None = None
+_demo_server_lock = threading.Lock()
+
+
+def _demo_app_html() -> bytes:
+    """Read the bundled harness page (works from source trees and wheels)."""
+    from importlib import resources
+
+    return (
+        resources.files("ton_wallet_assistant.telegram")
+        .joinpath(_DEMO_ASSET)
+        .read_bytes()
+    )
+
+
+class _DemoAppHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802
+        path = urllib.parse.urlparse(self.path).path
+        if path in ("/", "/demo", "/demo_app.html", "/index.html"):
+            body = _demo_app_html()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
+def ensure_demo_server() -> str:
+    """Start (once) the loopback server for the bundled demo harness and
+    return its ``http://127.0.0.1:<port>`` base URL."""
+    global _demo_server
+    with _demo_server_lock:
+        if _demo_server is None:
+            _demo_server = ThreadingHTTPServer(("127.0.0.1", 0), _DemoAppHandler)
+            threading.Thread(target=_demo_server.serve_forever, daemon=True).start()
+        return f"http://127.0.0.1:{_demo_server.server_address[1]}"
+
+
+def demo_app_url(context: TmaLaunchContext | None = None) -> str:
+    """Loopback URL of the bundled demo Mini App harness.
+
+    The launch context travels in the query string so the page can display
+    which bot/app/source URL it is standing in for.
+    """
+    base = ensure_demo_server() + "/demo"
+    if context is None:
+        return base
+    params: dict[str, str] = {}
+    if context.bot:
+        params["bot"] = context.bot
+    if context.app:
+        params["app"] = context.app
+    if context.start_param:
+        params["startapp"] = context.start_param
+    if context.url:
+        params["src"] = context.url
+    return base + "?" + urllib.parse.urlencode(params) if params else base
+
+
 def demo_webapp_resolution(context: TmaLaunchContext, *, resolved_url: str = "") -> WebAppResolution:
-    """Synthetic resolution for demo/offline mode — clearly marked."""
+    """Synthetic resolution for demo/offline mode — clearly marked.
+
+    With no explicit ``resolved_url`` the target is the bundled local demo
+    harness (never the remote ``context.url``), so demo mode exercises the
+    WebApp/TonConnect bridge without touching the network.
+    """
     init_data, unsafe = build_init_data(context.start_param, demo=True)
     return WebAppResolution(
-        url=resolved_url or context.url,
+        url=resolved_url or demo_app_url(context),
         init_data=init_data,
         init_data_unsafe=unsafe,
         via="demo",

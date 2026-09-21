@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demo Mini App Harness</title>
+<style>
+  :root {
+    --bg: #10161E; --bg2: #1D2633; --text: #E7ECEF; --hint: #9AA6B2;
+    --link: #45AEF5; --btn: #45AEF5; --btn-text: #0B1016; --warn: #f0a020;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .card { background: var(--bg2); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .banner { color: var(--warn); font-weight: 700; font-size: 13px; }
+  h1 { font-size: 18px; margin: 6px 0 2px; }
+  h2 { font-size: 13px; color: var(--hint); margin: 0 0 8px; text-transform: uppercase; }
+  .muted { color: var(--hint); font-size: 12px; word-break: break-all; }
+  .balance { font-size: 30px; font-weight: 700; margin: 4px 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  button {
+    background: var(--btn); color: var(--btn-text); border: 0; border-radius: 10px;
+    padding: 10px 14px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button.secondary { background: #2A3A4D; color: var(--text); }
+  #log {
+    font-family: ui-monospace, monospace; font-size: 11px; color: var(--hint);
+    max-height: 180px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  #log div { padding: 2px 0; border-bottom: 1px solid #232f3d; }
+  .kv { font-size: 12px; margin: 2px 0; word-break: break-all; }
+  .kv b { color: var(--hint); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="banner">LOCAL DEMO HARNESS — bundled offline Mini App (no real Telegram content)</div>
+<div class="card">
+  <h2>Launch context</h2>
+  <h1 id="app-title">Mini App</h1>
+  <div id="ctx"></div>
+  <div class="muted" id="bridge-status">Telegram bridge: waiting for injection…</div>
+</div>
+
+<div class="card">
+  <h2>Wallet (demo)</h2>
+  <div class="balance">42.1337 TON</div>
+  <div class="muted">Synthetic demo balance — nothing on-chain.</div>
+  <div class="row">
+    <button id="btn-connect">Connect TON wallet</button>
+    <button id="btn-senddata" class="secondary">sendData</button>
+    <button id="btn-invoice" class="secondary">Open invoice</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Telegram.WebApp API</h2>
+  <div class="row">
+    <button class="secondary" id="btn-expand">expand()</button>
+    <button class="secondary" id="btn-mainbtn">Toggle MainButton</button>
+    <button class="secondary" id="btn-backbtn">Toggle BackButton</button>
+    <button class="secondary" id="btn-settingsbtn">Toggle SettingsButton</button>
+    <button class="secondary" id="btn-popup">showPopup</button>
+    <button class="secondary" id="btn-confirm">showConfirm</button>
+    <button class="secondary" id="btn-storage">CloudStorage set/get</button>
+    <button class="secondary" id="btn-haptic">Haptic</button>
+    <button class="secondary" id="btn-tglink">openTelegramLink</button>
+    <button class="secondary" id="btn-close">close()</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Event log</h2>
+  <div id="log"></div>
+</div>
+
+<!-- twa-demo-harness v1 -->
+<script>
+(function () {
+  var logEl = document.getElementById('log');
+  function log(msg) {
+    var d = document.createElement('div');
+    d.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
+    logEl.insertBefore(d, logEl.firstChild);
+  }
+
+  var q = new URLSearchParams(location.search);
+  var bot = q.get('bot') || '';
+  var app = q.get('app') || '';
+  var src = q.get('src') || '';
+  document.getElementById('app-title').textContent =
+    bot ? '@' + bot + (app ? '/' + app : '') : 'Mini App';
+  var ctxEl = document.getElementById('ctx');
+  var rows = [];
+  if (src) rows.push(['requested', src]);
+  if (q.get('startapp')) rows.push(['startapp', q.get('startapp')]);
+  rows.push(['served by', 'bundled demo harness (loopback)']);
+  ctxEl.innerHTML = rows.map(function (r) {
+    return '<div class="kv"><b>' + r[0] + ':</b> ' +
+      String(r[1]).replace(/</g, '&lt;') + '</div>';
+  }).join('');
+
+  var wa = null;
+  function W() { return window.Telegram && window.Telegram.WebApp; }
+  function say(m) { log(m); }
+
+  function init() {
+    wa = W();
+    if (!wa) return;
+    document.getElementById('bridge-status').textContent =
+      'Telegram bridge: connected (platform=' + wa.platform +
+      ', version=' + wa.version + ')';
+    try { wa.ready(); wa.expand(); } catch (e) { say('ready/expand: ' + e); }
+    var unsafe = wa.initDataUnsafe || {};
+    Object.keys(unsafe).forEach(function (k) {
+      say('initDataUnsafe.' + k + ' = ' + JSON.stringify(unsafe[k]).slice(0, 120));
+    });
+    if (wa.initData) say('initData = ' + wa.initData.slice(0, 120));
+    wa.onEvent('viewportChanged', function (d) { say('event viewportChanged ' + JSON.stringify(d)); });
+    wa.onEvent('themeChanged', function () { say('event themeChanged'); });
+  }
+  var tries = 0;
+  var timer = setInterval(function () {
+    if (W()) { clearInterval(timer); init(); }
+    else if (++tries > 50) {
+      clearInterval(timer);
+      document.getElementById('bridge-status').textContent =
+        'Telegram bridge: absent — standalone preview mode';
+    }
+  }, 200);
+
+  var mainOn = false, backOn = false, settingsOn = false;
+  function on(id, fn) { document.getElementById(id).addEventListener('click', fn); }
+
+  on('btn-expand', function () { if (W()) W().expand(); say('expand()'); });
+  on('btn-mainbtn', function () {
+    if (!W()) return say('no bridge');
+    mainOn = !mainOn;
+    if (mainOn) {
+      W().MainButton.setParams({ text: 'PAY 0.5 TON', is_visible: true, is_active: true });
+      W().MainButton.onClick(function () {
+        say('MainButton pressed → sendData');
+        W().sendData(JSON.stringify({ action: 'pay', amount: '0.5', currency: 'TON' }));
+      });
+      W().MainButton.show();
+    } else { W().MainButton.hide(); }
+  });
+  on('btn-backbtn', function () {
+    if (!W()) return say('no bridge');
+    backOn = !backOn;
+    backOn ? W().BackButton.show() : W().BackButton.hide();
+    say('BackButton ' + (backOn ? 'shown' : 'hidden'));
+  });
+  on('btn-settingsbtn', function () {
+    if (!W()) return say('no bridge');
+    settingsOn = !settingsOn;
+    settingsOn ? W().SettingsButton.show() : W().SettingsButton.hide();
+    say('SettingsButton ' + (settingsOn ? 'shown' : 'hidden'));
+  });
+  on('btn-popup', function () {
+    if (!W()) return say('no bridge');
+    W().showPopup({ title: 'Demo', message: 'Popup from the local harness',
+      buttons: [{ id: 'ok', type: 'ok' }] }, function (id) { say('popup closed: ' + id); });
+  });
+  on('btn-confirm', function () {
+    if (!W()) return say('no bridge');
+    W().showConfirm('Confirm demo action?', function (yes) { say('confirm → ' + yes); });
+  });
+  on('btn-storage', function () {
+    if (!W()) return say('no bridge');
+    W().CloudStorage.setItem('demo_key', 'demo-' + Date.now(), function (err, ok) {
+      if (err || !ok) return say('storage set failed: ' + err);
+      W().CloudStorage.getItem('demo_key', function (e, v) { say('storage get → ' + v); });
+    });
+  });
+  on('btn-haptic', function () {
+    if (!W()) return say('no bridge');
+    W().HapticFeedback.impactOccurred('medium'); say('haptic impact');
+  });
+  on('btn-tglink', function () {
+    if (!W()) return say('no bridge');
+    W().openTelegramLink('https://t.me/wallet'); say('openTelegramLink t.me/wallet');
+  });
+  on('btn-connect', function () {
+    var req = encodeURIComponent(JSON.stringify({
+      manifestUrl: 'https://example.com/tonconnect-manifest.json',
+      items: [{ name: 'ton_addr' }]
+    }));
+    var url = 'tc://?v=2&id=demo-request-1&r=' + req + '&ret=none';
+    say('TonConnect request → ' + url.slice(0, 80) + '…');
+    if (W()) W().openTelegramLink(url);
+  });
+  on('btn-senddata', function () {
+    var data = JSON.stringify({ hello: 'bot', ts: Date.now() });
+    if (W()) W().sendData(data); else say('sendData (no bridge): ' + data);
+  });
+  on('btn-invoice', function () {
+    if (!W()) return say('no bridge');
+    W().openInvoice('https://example.com/invoice/demo', function (status) {
+      say('invoice status: ' + status);
+    });
+  });
+  on('btn-close', function () { if (W()) W().close(); say('close()'); });
+
+  log('harness loaded: ' + location.href);
+})();
+</script>
+</body>
+</html>

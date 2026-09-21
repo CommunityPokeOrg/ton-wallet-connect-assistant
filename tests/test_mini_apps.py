@@ -3,6 +3,7 @@ JS injection escaping, host-state model, and link interception."""
 
 import json
 import re
+import urllib.parse
 from urllib.request import urlopen
 
 import pytest
@@ -14,6 +15,7 @@ from ton_wallet_assistant.telegram.mini_apps import (
     build_init_data,
     classify_link,
     decode_tonconnect_startapp,
+    demo_app_url,
     demo_webapp_resolution,
     intercept_navigation,
     parse_tma_link,
@@ -134,6 +136,39 @@ def test_demo_resolution_is_never_authenticated():
     assert res.authenticated is False and res.via == "demo"
     assert res.init_data_unsafe["demo"] is True
     assert "auth_date" not in res.init_data and "hash=" not in res.init_data
+
+
+def test_demo_resolution_targets_bundled_harness():
+    """Demo mode must not navigate the webview to the remote t.me stub
+    (which immediately bounces to tg://) — it resolves to the bundled
+    loopback harness carrying the launch context."""
+    ctx = parse_tma_link("https://t.me/wallet")
+    res = demo_webapp_resolution(ctx)
+    host_url = res.url.split("?")[0]
+    assert host_url.startswith("http://127.0.0.1:") and host_url.endswith("/demo")
+    assert "t.me" not in host_url
+    assert "bot=wallet" in res.url
+    assert res.via == "demo" and res.authenticated is False
+
+
+def test_demo_app_url_carries_context():
+    ctx = parse_tma_link("https://t.me/wallet/start?startapp=abc")
+    url = demo_app_url(ctx)
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert query["bot"] == ["wallet"]
+    assert query["app"] == ["start"]
+    assert query["startapp"] == ["abc"]
+    assert query["src"] == [ctx.url]
+
+
+def test_demo_harness_served_over_loopback():
+    """The bundled harness is actually served: real HTML over loopback HTTP."""
+    url = demo_app_url()
+    with urlopen(url, timeout=5) as resp:
+        body = resp.read().decode()
+        assert resp.status == 200
+    assert "twa-demo-harness" in body
+    assert "Telegram.WebApp" in body
 
 
 def test_js_json_escaping():
@@ -273,6 +308,15 @@ def test_sdk_shim_events():
     shim.ready()
     assert events == ["ready"]
     assert shim.initData == "query_id=1"
+
+
+def test_demo_harness_404_for_unknown_path():
+    import urllib.error
+
+    base = demo_app_url().split("/demo")[0]
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urlopen(base + "/nope", timeout=5)
+    assert exc.value.code == 404
 
 
 def test_callback_server():

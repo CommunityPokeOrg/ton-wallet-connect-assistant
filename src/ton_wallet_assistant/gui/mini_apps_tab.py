@@ -22,6 +22,7 @@ into the same explicit desktop approval flow as the mobile companion.
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QUrl
@@ -57,12 +58,12 @@ from .webapp_bridge import WebAppBridge, intercept_navigation
 
 try:  # optional — PySide6-Addons ships QtWebEngine; CI/headless may lack it
     from PySide6.QtWebChannel import QWebChannel
-    from PySide6.QtWebEngineCore import QWebEnginePage
+    from PySide6.QtWebEngineCore import QWebEngineLoadingInfo, QWebEnginePage
     from PySide6.QtWebEngineWidgets import QWebEngineView
 
     _WEBENGINE_AVAILABLE = True
 except Exception:  # ImportError / missing QtWebEngineProcess / etc.
-    QWebChannel = QWebEnginePage = QWebEngineView = None  # type: ignore[assignment]
+    QWebChannel = QWebEngineLoadingInfo = QWebEnginePage = QWebEngineView = None  # type: ignore[assignment]
     _WEBENGINE_AVAILABLE = False
 
 
@@ -91,7 +92,17 @@ if _WEBENGINE_AVAILABLE:
                 self._bridge.tonconnect_requested.emit(url.toString())
             elif kind == "telegram":
                 self._bridge.telegram_link_requested.emit(url.toString())
+            if is_main_frame:
+                # A refused main-frame navigation surfaces as a page load
+                # failure — record it so the error panel can say why.
+                self._bridge.webapp_event.emit(
+                    "navigation_blocked", f"{kind}: {url.toString()}"
+                )
             return False
+
+        def javaScriptConsoleMessage(self, level, message, line, source):  # noqa: N802
+            """Forward page console output to stderr → runner logs."""
+            print(f"[webview js:{int(level)}] {source}:{line} {message}", file=sys.stderr)
 
 
 class MiniAppsTab(QWidget):
@@ -114,6 +125,8 @@ class MiniAppsTab(QWidget):
         self._external = TelegramMiniAppBridge()
         self._context: TmaLaunchContext | None = None
         self._resolution: WebAppResolution | None = None
+        self._load_error: dict | None = None
+        self._last_blocked_nav = ""
         self._webview_ok = (
             webengine_supported() if webview_enabled is None else webview_enabled
         )
@@ -212,6 +225,8 @@ class MiniAppsTab(QWidget):
                 self._channel.registerObject("telegramBridge", self.bridge)
                 page.setWebChannel(self._channel)
                 page.loadFinished.connect(self._on_load_finished)
+                page.loadingChanged.connect(self._on_loading_changed)
+                page.renderProcessTerminated.connect(self._on_render_terminated)
                 self.stack.addWidget(self.web_view)
             except Exception:
                 self.web_view = None
@@ -231,6 +246,30 @@ class MiniAppsTab(QWidget):
         fb.addWidget(self.context_label)
         fb.addStretch(1)
         self.stack.addWidget(self.fallback_panel)
+
+        # ---- load-failure diagnostics panel -------------------------------
+        self.error_panel = QWidget()
+        ep = QVBoxLayout(self.error_panel)
+        self.error_title = QLabel("Mini app failed to load")
+        self.error_title.setStyleSheet("font-weight:bold; color:#E74C3C;")
+        ep.addWidget(self.error_title)
+        self.error_detail = QLabel("")
+        self.error_detail.setWordWrap(True)
+        self.error_detail.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        ep.addWidget(self.error_detail)
+        err_btns = QHBoxLayout()
+        self.retry_btn = QPushButton("Retry")
+        self.retry_btn.clicked.connect(self._retry_load)
+        err_btns.addWidget(self.retry_btn)
+        self.error_ext_btn = QPushButton("Open in browser")
+        self.error_ext_btn.clicked.connect(self._open_last_external)
+        err_btns.addWidget(self.error_ext_btn)
+        err_btns.addStretch(1)
+        ep.addLayout(err_btns)
+        ep.addStretch(1)
+        self.stack.addWidget(self.error_panel)
         layout.addWidget(self.stack, 1)
 
         # ---- native bottom MainButton --------------------------------------
@@ -273,6 +312,13 @@ class MiniAppsTab(QWidget):
                 self.status_label.setText("Resolving mini app…")
                 self.async_loop.submit(self._resolve(self._context), self._on_resolved)
         else:
+            if self.session.demo:
+                # Demo mode never touches the network: direct URLs also load
+                # the bundled harness, labelled with the requested target.
+                self._finish_load(
+                    demo_webapp_resolution(TmaLaunchContext(url=url, bot=""))
+                )
+                return
             init_data, unsafe = build_init_data()
             self._finish_load(
                 WebAppResolution(
@@ -318,16 +364,21 @@ class MiniAppsTab(QWidget):
 
     def _on_resolved(self, resolution: WebAppResolution | None, error) -> None:
         if error or resolution is None:
-            self.status_label.setText(
-                f"Cannot resolve mini app: {error or 'unavailable'} — "
-                "it may require Telegram client authentication"
+            self._show_error(
+                "Could not resolve mini app",
+                self._context.url if self._context else "",
+                str(error or "unavailable"),
+                "The app may require Telegram client authentication — sign in "
+                "on the Telegram tab, or use demo mode for the bundled "
+                "offline harness.",
             )
-            self.stack.setCurrentWidget(self.fallback_panel)
             return
         self._finish_load(resolution)
 
     def _finish_load(self, resolution: WebAppResolution) -> None:
         self._resolution = resolution
+        self._load_error = None
+        self._last_blocked_nav = ""
         self.bridge.runtime.init_data = resolution.init_data
         self.bridge.runtime.init_data_unsafe = resolution.init_data_unsafe
         if self.web_view is not None:
@@ -340,10 +391,56 @@ class MiniAppsTab(QWidget):
             )
             self.stack.setCurrentWidget(self.fallback_panel)
 
+    def _on_loading_changed(self, info) -> None:
+        """Capture real load diagnostics from QWebEngineLoadingInfo so a
+        failure can show the URL, error domain/code, and message."""
+        if (
+            info.status() == QWebEngineLoadingInfo.LoadStatus.LoadFailedStatus
+            or info.isErrorPage()
+        ):
+            try:
+                domain = info.errorDomain().name
+            except Exception:
+                domain = str(info.errorDomain())
+            self._load_error = {
+                "url": info.url().toString()
+                or (self._resolution.url if self._resolution else ""),
+                "domain": domain,
+                "code": info.errorCode(),
+                "message": info.errorString(),
+            }
+
+    def _on_render_terminated(self, status, code) -> None:
+        self._load_error = {
+            "url": self.web_view.url().toString() if self.web_view else "",
+            "domain": "RenderProcess",
+            "code": code,
+            "message": f"renderer process terminated (status {int(status)})",
+        }
+        self._present_error("Mini app view crashed")
+
     def _on_load_finished(self, ok: bool) -> None:
         if not ok:
-            self.status_label.setText("Page failed to load")
+            err = self._load_error or {}
+            details = []
+            if err.get("domain"):
+                details.append(
+                    f"{err['domain']} (code {err['code']}): {err['message']}"
+                )
+            if self._last_blocked_nav:
+                details.append(f"blocked navigation: {self._last_blocked_nav}")
+            if not details:
+                details.append("navigation refused or network error")
+            self._show_error(
+                "Page failed to load",
+                err.get("url") or (self._resolution.url if self._resolution else ""),
+                "\n".join(details),
+                "Check connectivity/proxy settings. t.me links need a "
+                "signed-in Telegram session (Telegram tab); demo mode uses "
+                "the bundled offline harness.",
+            )
             return
+        self._load_error = None
         page = self.web_view.page()
         page.runJavaScript(webchannel_bootstrap_js())
         res = self._resolution
@@ -357,6 +454,46 @@ class MiniAppsTab(QWidget):
         label = res.url if res else page.url().toString()
         auth = "authenticated" if (res and res.authenticated) else "unauthenticated"
         self.status_label.setText(f"Loaded: {label} ({auth})")
+
+    def _show_error(self, title: str, url: str, detail: str, guidance: str) -> None:
+        parts = []
+        if url:
+            parts.append(f"URL: {url}")
+        if detail:
+            parts.append(detail)
+        if guidance:
+            parts.append(guidance)
+        self.error_title.setText(title)
+        self.error_detail.setText("\n\n".join(parts))
+        self.error_ext_btn.setEnabled(bool(url))
+        self.status_label.setText(f"{title}: {url or detail}")
+        self.stack.setCurrentWidget(self.error_panel)
+
+    def _present_error(self, title: str) -> None:
+        err = self._load_error or {}
+        self._show_error(
+            title,
+            str(err.get("url", "")),
+            f"{err.get('domain', 'error')} (code {err.get('code', '?')}): "
+            f"{err.get('message', 'unknown')}",
+            "Retry the load, or open the app in an external browser.",
+        )
+
+    def _retry_load(self) -> None:
+        if self._resolution is not None and self.web_view is not None:
+            self._load_error = None
+            self._last_blocked_nav = ""
+            self.web_view.setUrl(QUrl(self._resolution.url))
+            self.stack.setCurrentWidget(self.web_view)
+        elif self.url_edit.text().strip():
+            self._load_clicked()
+
+    def _open_last_external(self) -> None:
+        url = (self._resolution.url if self._resolution else "") or self.url_edit.text()
+        try:
+            self._external.launch(validate_web_url(url))
+        except ValueError:
+            self.status_label.setText(f"Blocked unsafe link: {url[:80]}")
 
     @staticmethod
     def _describe_context(ctx: TmaLaunchContext) -> str:
@@ -435,6 +572,10 @@ class MiniAppsTab(QWidget):
             self.status_label.setText(f"Blocked unsafe link: {url[:80]}")
 
     def _on_webapp_event(self, event: str, _payload: str) -> None:
+        if event == "navigation_blocked":
+            self._last_blocked_nav = _payload
+            self.status_label.setText(f"Blocked navigation: {_payload[:80]}")
+            return
         self.status_label.setText(f"WebApp event: {event}")
 
     def _on_main_button(self, state: dict) -> None:

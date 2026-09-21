@@ -124,6 +124,21 @@ def test_mini_apps_tab_constructs_headless(app, tmp_path, monkeypatch):
         assert "wallet" in tab.context_label.text()
         assert tab._resolution is not None
         assert tab._resolution.authenticated is False
+        # demo mode resolves to the bundled loopback harness, never t.me
+        assert tab._resolution.url.startswith("http://127.0.0.1:")
+        assert "t.me" not in tab._resolution.url.split("?")[0]
+
+        # direct URLs in demo mode also land on the local harness
+        tab.url_edit.setText("https://app.ston.fi")
+        tab._load_clicked()
+        assert tab._resolution.url.startswith("http://127.0.0.1:")
+        assert "src=https%3A%2F%2Fapp.ston.fi" in tab._resolution.url
+
+        # a failed load surfaces a diagnostics panel, not a silent blank page
+        tab._on_load_finished(False)
+        assert tab.stack.currentWidget() is tab.error_panel
+        assert "failed" in tab.error_title.text().lower()
+        assert tab.error_detail.text()
 
         # invalid URL is refused
         tab.url_edit.setText("javascript:alert(1)")
@@ -133,6 +148,11 @@ def test_mini_apps_tab_constructs_headless(app, tmp_path, monkeypatch):
         # webview-originated tc:// payload routes to the approval channel
         tab.bridge.postEvent("web_app_data", json.dumps({"data": "tc://?v=2&id=x"}))
         assert forwarded and forwarded[-1][0].startswith("tc://")
+
+        # refused main-frame navigations are recorded for diagnostics
+        tab.bridge.webapp_event.emit("navigation_blocked", "telegram: tg://resolve?domain=wallet")
+        assert tab._last_blocked_nav.startswith("telegram:")
+        assert "Blocked navigation" in tab.status_label.text()
         tab.shutdown()
     finally:
         loop.stop()
