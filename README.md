@@ -1,7 +1,7 @@
 # TON Wallet Connect Assistant
 
 A Tonkeeper-style **desktop TON wallet** in Python (PySide6/Qt) with a built-in
-[TonConnect](https://docs.tonconnect.org/) connection assistant — the link flow
+[TonConnect](https://docs.ton.org/applications/ton-connect/) connection assistant — the link flow
 used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets.
 
 ## Features
@@ -81,6 +81,13 @@ connections, host `tonconnect-manifest.json` at a public HTTPS URL (see
 `assets/tonconnect-manifest.example.json`, e.g. via GitHub Pages) and set
 `--manifest-url` / `TON_WALLET_ASSISTANT_MANIFEST_URL`. Without it the tab runs
 in demo mode.
+
+Official references:
+
+- [TON Connect documentation](https://docs.ton.org/applications/ton-connect/)
+  ([getting started](https://docs.ton.org/applications/ton-connect/get-started))
+- [Protocol spec / repository](https://github.com/ton-blockchain/ton-connect)
+- [SDK reference](https://ton-connect.github.io/sdk/index.html)
 
 ## Architecture
 
