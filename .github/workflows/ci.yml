@@ -18,17 +18,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
       - name: Qt runtime libraries (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libdbus-1-3 libfontconfig1 libglib2.0-0
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip setuptools wheel
       - name: Install
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
         # dev extra includes PySide6 for offscreen GUI tests
       - name: Lint
-        run: ruff check src tests
+        run: python -m ruff check src tests
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest -v
+          QTWEBENGINE_CHROMIUM_FLAGS: --no-sandbox --disable-gpu
+        run: python -m pytest -v
