@@ -172,9 +172,6 @@ def test_config_from_env(tmp_path):
 @pytest.mark.parametrize(
     "env",
     [
-        {},
-        {"TELEGRAM_API_ID": "1"},  # missing hash
-        {"TELEGRAM_API_HASH": "x"},  # missing id
         {"TELEGRAM_API_ID": "notanint", "TELEGRAM_API_HASH": "x"},
         {"TELEGRAM_API_ID": "-1", "TELEGRAM_API_HASH": "x"},
     ],
@@ -182,6 +179,54 @@ def test_config_from_env(tmp_path):
 def test_config_from_env_rejects_bad(env):
     with pytest.raises(TelegramConfigError):
         TelegramConfig.from_env(env)
+
+
+def test_config_builtin_defaults(tmp_path):
+    """No env and no config file section → built-in app defaults apply."""
+    from ton_wallet_assistant.telegram.config import DEFAULT_API_HASH, DEFAULT_API_ID
+
+    cfg = TelegramConfig.resolve(env={}, file_config={}, data_dir=tmp_path)
+    assert cfg.api_id == DEFAULT_API_ID and cfg.api_id == 24715872
+    assert cfg.api_hash == DEFAULT_API_HASH
+    # partial config: hash falls back when only api_id is set
+    cfg2 = TelegramConfig.resolve(
+        env={"TELEGRAM_API_ID": "42"}, file_config={}, data_dir=tmp_path
+    )
+    assert cfg2.api_id == 42 and cfg2.api_hash == DEFAULT_API_HASH
+    # masked diagnostics never expose the hash value
+    masked = cfg.masked()
+    assert masked["api_hash"] == "***"
+    assert cfg.api_hash not in str(masked)
+
+
+def test_config_file_beats_defaults_env_beats_file(tmp_path):
+    file_cfg = {"telegram": {"api_id": 555, "api_hash": "file-hash"}}
+    cfg = TelegramConfig.resolve(env={}, file_config=file_cfg, data_dir=tmp_path)
+    assert cfg.api_id == 555 and cfg.api_hash == "file-hash"
+    cfg = TelegramConfig.resolve(
+        env={"TELEGRAM_API_ID": "777", "TELEGRAM_API_HASH": "env-hash"},
+        file_config=file_cfg,
+        data_dir=tmp_path,
+    )
+    assert cfg.api_id == 777 and cfg.api_hash == "env-hash"
+
+
+def test_local_config_files_gitignored():
+    """Repo-local config.json/.env must be ignored; tracked assets must not be."""
+    repo = Path(__file__).resolve().parents[1]
+
+    def ignored(path: str) -> bool:
+        return (
+            subprocess.run(
+                ["git", "check-ignore", "-q", path], cwd=repo
+            ).returncode
+            == 0
+        )
+
+    assert ignored("config.json")
+    assert ignored("config.local.json")
+    assert ignored(".env")
+    assert not ignored("assets/config.example.json")
 
 
 # ------------------------------------------------------------ TdJson layer
@@ -518,12 +563,14 @@ def test_sdk_telegram_demo():
     asyncio.run(run())
 
 
-def test_sdk_telegram_real_requires_env(monkeypatch):
+def test_sdk_telegram_real_uses_defaults_but_needs_lib(monkeypatch):
+    """With built-in credential defaults, real mode is always 'configured';
+    creating the client then fails only on the missing libtdjson binary."""
     sdk = TonWalletSDK(network="mainnet", demo=False)
     monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
     monkeypatch.delenv("TELEGRAM_API_HASH", raising=False)
-    assert not sdk.telegram_configured
-    with pytest.raises(TelegramConfigError):
+    assert sdk.telegram_configured
+    with pytest.raises(TdJsonLoadError):
         _ = sdk.telegram
 
 

@@ -7,3 +7,11 @@ build/
 .pytest_cache/
 .ruff_cache/
 *.local
+
+# local credential/config files — never commit real secrets
+config.json
+config.local.json
+.env
+.env.local
+.env.*.local
+*.secret.json

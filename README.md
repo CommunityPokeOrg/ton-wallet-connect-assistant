@@ -66,12 +66,16 @@ used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets
 - **100% Python wrapper**: `telegram/tdjson.py` loads the prebuilt
   `libtdjson` shared library via `ctypes` at runtime — no Cython, no C/C++
   extension, no generated binding layer anywhere in the repo.
-- **Credentials** come from the environment or the config file — never
-  hardcoded and never logged (`api_hash` is masked in all diagnostics).
-  Precedence: `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` env vars →
-  `"telegram"` section of `config.json` (see `assets/config.example.json`
-  — copy it to `~/.config/ton-wallet-connect-assistant/config.json` and
-  fill in your own values from https://my.telegram.org). `TDLIB_PATH`
+- **Credentials** resolve as: `TELEGRAM_API_ID` / `TELEGRAM_API_HASH`
+  env vars → `"telegram"` section of `config.json` (see
+  `assets/config.example.json` — copy it to
+  `~/.config/ton-wallet-connect-assistant/config.json` and fill in your
+  own values from https://my.telegram.org) → built-in app defaults
+  shipped in `telegram/config.py`. The built-in defaults are **public
+  app credentials in tracked source** — a convenience for out-of-the-box
+  operation, not a secret store; supply your own for production use.
+  `api_hash` is masked (`***`) in all diagnostics and never logged.
+  Local `config.json`/`.env` files are gitignored. `TDLIB_PATH`
   overrides library discovery.
 - **libtdjson discovery** (`telegram/loader.py`) searches, in order:
   `TDLIB_PATH` / config `tdlib_path` → macOS `.app` bundle dirs

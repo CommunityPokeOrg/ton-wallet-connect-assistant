@@ -1,13 +1,19 @@
-"""Telegram client configuration — all secrets come from the environment.
+"""Telegram client configuration.
 
-Never hardcode API credentials: Telegram requires ``api_id`` + ``api_hash``
-from https://my.telegram.org. They are read from env vars at runtime:
+Credentials resolve with strict precedence — environment variables,
+then the ``"telegram"`` section of ``config.json``, then the built-in
+app defaults (``DEFAULT_API_ID`` / ``DEFAULT_API_HASH``):
 
-* ``TELEGRAM_API_ID``    — integer app id (required for real mode)
-* ``TELEGRAM_API_HASH``  — app hash (required, never logged)
+* ``TELEGRAM_API_ID``    — integer app id
+* ``TELEGRAM_API_HASH``  — app hash (never logged; masked in diagnostics)
 * ``TELEGRAM_PHONE``     — optional default phone for the auth flow
 * ``TDLIB_PATH``         — optional path to the prebuilt libtdjson library
 * ``TELEGRAM_TEST_DC``   — ``1``/``true`` to use Telegram test datacenters
+
+Note: the built-in defaults are public app credentials shipped in source
+anyone can read them — they are a convenience so the app works out of
+the box, not a secret store. Operators should supply their own
+api_id/api_hash from https://my.telegram.org via env or config.json.
 """
 
 from __future__ import annotations
@@ -19,6 +25,12 @@ from pathlib import Path
 
 class TelegramConfigError(Exception):
     """Raised when required Telegram configuration is missing/invalid."""
+
+
+# Built-in fallback app credentials (supplied by the project owner).
+# Public by design — overridden by env vars or config.json when present.
+DEFAULT_API_ID = 24715872
+DEFAULT_API_HASH = "f20ddb0c4be8968b984e5ac7467034ef"
 
 
 @dataclass(frozen=True)
@@ -52,12 +64,14 @@ class TelegramConfig:
         file_config: dict | None = None,
         data_dir: str | Path | None = None,
     ) -> TelegramConfig:
-        """Resolve configuration: env vars over the app's config file.
+        """Resolve configuration: env vars > config file > code defaults.
 
         ``file_config`` is the parsed ``config.json`` (a ``"telegram"``
         section is read: ``api_id``, ``api_hash``, ``phone``,
         ``tdlib_path``, ``test_dc``). When ``file_config`` is None the
-        standard app config file is loaded. Env vars always win.
+        standard app config file is loaded. Env vars always win; when
+        neither env nor file supplies credentials, the built-in
+        ``DEFAULT_API_ID``/``DEFAULT_API_HASH`` are used.
         """
         env = os.environ if env is None else env
         if file_config is None:
@@ -74,19 +88,18 @@ class TelegramConfig:
 
         api_id = pick("TELEGRAM_API_ID", "api_id")
         api_hash = pick("TELEGRAM_API_HASH", "api_hash")
-        missing = [n for n, v in (("api_id", api_id), ("api_hash", api_hash)) if not v]
-        if missing:
-            raise TelegramConfigError(
-                f"missing Telegram credentials: {', '.join(missing)} — set "
-                "TELEGRAM_API_ID/TELEGRAM_API_HASH or a \"telegram\" section in "
-                f"the config file (get credentials at https://my.telegram.org)"
-            )
+        if not api_id:
+            api_id = str(DEFAULT_API_ID)
+        if not api_hash:
+            api_hash = DEFAULT_API_HASH
         try:
             api_id_int = int(api_id)
         except ValueError as exc:
             raise TelegramConfigError("TELEGRAM_API_ID/api_id must be an integer") from exc
         if not api_id_int > 0:
             raise TelegramConfigError("TELEGRAM_API_ID/api_id must be a positive integer")
+        if not api_hash.strip():
+            raise TelegramConfigError("TELEGRAM_API_HASH/api_hash must not be empty")
 
         base = Path(data_dir) if data_dir else Path(
             env.get("XDG_CONFIG_HOME", Path.home() / ".config")
