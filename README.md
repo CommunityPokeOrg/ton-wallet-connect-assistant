@@ -60,6 +60,20 @@ used by Telegram's built-in **Wallet**, Tonkeeper, Tonhub, and other TON wallets
   (they still require desktop approval). In demo mode the bridge binds to
   loopback only and executes nothing real.
 
+### Telegram tab (TDLib, pure Python)
+- Sign in to a Telegram account (phone → code → optional 2FA password),
+  list chats, and watch incoming updates, right from the app or the SDK.
+- **100% Python wrapper**: `telegram/tdjson.py` loads the prebuilt
+  `libtdjson` shared library via `ctypes` at runtime — no Cython, no C/C++
+  extension, no generated binding layer anywhere in the repo.
+- Real mode requires `TELEGRAM_API_ID` + `TELEGRAM_API_HASH` (from
+  https://my.telegram.org — env only, never hardcoded) and a libtdjson
+  binary (`TDLIB_PATH`, or `libtdjson.so`/`tdjson.dll`/`libtdjson.dylib`
+  on the loader path). Telegram session data is stored under the app's
+  config dir.
+- Demo mode simulates the entire flow offline — phone, code `12345`,
+  chats, and message updates — clearly labelled, no network.
+
 ## Quick start
 
 ```bash
@@ -142,8 +156,19 @@ async for req in sdk.pairing_requests(): # relayed payloads from the phone
         sdk.reject_pairing_request(req.request_id)
 ```
 
-See `examples/sdk_demo.py` and `examples/pairing_demo.py` for runnable
-walkthroughs.
+Telegram (TDLib — pure-Python ctypes over libtdjson, no Cython/C extensions):
+
+```python
+tg = sdk.telegram                      # demo → offline DemoTelegramClient
+await tg.start()                       # real: TdJsonClient from env config
+await tg.submit_phone("+15551234567")
+await tg.submit_code("12345")          # demo code; real mode uses SMS
+await tg.get_chats(); await tg.send_message(chat_id, "hi")
+async for update in tg.updates(): ...
+```
+
+See `examples/sdk_demo.py`, `examples/pairing_demo.py`, and
+`examples/telegram_demo.py` for runnable walkthroughs.
 
 Security: mnemonics/keys are never logged; the decrypted mnemonic exists in
 memory only between `unlock_and_derive()` and `lock()`/`close()`. Demo mode
@@ -207,6 +232,11 @@ src/ton_wallet_assistant/
 │   ├── server.py          # threaded HTTP bridge (token-gated endpoints)
 │   ├── scanner_page.py    # self-contained mobile QR scanner page
 │   └── manager.py         # request queue + approval state machine
+├── telegram/              # Telegram client — pure Python + ctypes libtdjson
+│   ├── config.py          # env config (TELEGRAM_API_ID/HASH, TDLIB_PATH)
+│   ├── client.py          # TelegramClient ABC + auth state machine
+│   ├── tdjson.py          # ctypes wrapper + async client (no Cython/C ext)
+│   └── demo.py            # offline demo client (code 12345)
 └── gui/
     ├── async_loop.py      # asyncio thread bridged to Qt signals
     ├── theme.py           # dark Tonkeeper-style stylesheet
@@ -217,6 +247,7 @@ src/ton_wallet_assistant/
     ├── collectibles_tab.py# NFT grid
     ├── connect_tab.py     # TonConnect wallet-connect flow
     ├── companion_tab.py   # mobile pairing: bridge control + approvals
+    ├── telegram_tab.py    # Telegram TDLib auth + chats + update feed
     ├── settings_tab.py    # lock, reveal phrase, delete wallet, config info
     ├── dialogs.py         # password / send-confirm / receive / tx details /
                            # relayed-request approval
@@ -251,8 +282,12 @@ keystore encryption round-trip/permissions/wrong-password, amount parsing,
 TEP-74 jetton transfer body construction, tonapi action parsing, demo chain
 client (TON + jetton sends, NFTs), SDK public-API tests (importable without
 PySide6, demo wallet flow, keystore create/unlock/send, TonConnect demo
-lifecycle), the TonConnect demo cycle, and a headless (offscreen) end-to-end
-GUI flow across all pages. CI runs lint + tests on Linux, Windows, and macOS.
+lifecycle), companion pairing (token auth, payload validation, nonce/timestamp
+replay protection, approval state machine, HTTP endpoints, SDK demo flow),
+Telegram TDLib (env config validation, ctypes request/response + auth states +
+update dispatch + errors + shutdown against an in-process fake libtdjson, demo
+client flow, no-native-code guard), and a headless (offscreen) end-to-end GUI
+flow across all pages. CI runs lint + tests on Linux, Windows, and macOS.
 
 ## Notes & limitations
 
@@ -263,3 +298,7 @@ GUI flow across all pages. CI runs lint + tests on Linux, Windows, and macOS.
 - On air-gapped or restricted networks, real mode needs outbound access to
   tonapi.io (reads) and TON lite-servers (sends); the TonConnect tab also uses
   the SSE bridge.
+- The Telegram tab requires a prebuilt `libtdjson` binary at runtime (the only
+  non-Python component — loaded via ctypes; nothing compiled at build time and
+  no Cython/native wrapper in this repo). User-account auth via TDLib requires
+  your own api_id/api_hash from https://my.telegram.org.

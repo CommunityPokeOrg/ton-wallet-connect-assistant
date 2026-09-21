@@ -225,6 +225,7 @@ class TonWalletSDK:
         self.pairing = PairingManager(demo=demo, network=network)
         self.pairing.transfer_handler = self._pairing_transfer
         self.pairing.connect_handler = self._pairing_connect
+        self._telegram = None  # lazy — see .telegram
 
     # ------------------------------------------------------------ demo
 
@@ -482,6 +483,44 @@ class TonWalletSDK:
         webbrowser.open(details.url)
         return f"forwarded universal link to wallet app ({details.wallet_host})"
 
+    # ------------------------------------------------- telegram (TDLib)
+
+    @property
+    def telegram(self):
+        """Telegram client (pure-Python ctypes over libtdjson).
+
+        Demo mode returns a DemoTelegramClient (offline simulation; login
+        code is ``12345``). Real mode builds a TdJsonClient from
+        TELEGRAM_API_ID / TELEGRAM_API_HASH (and optional TDLIB_PATH) —
+        raises TelegramConfigError when credentials are missing.
+        """
+        if self._telegram is None:
+            if self.demo:
+                from .telegram import DemoTelegramClient
+
+                self._telegram = DemoTelegramClient()
+            else:
+                from .telegram import TdJsonClient, TelegramConfig
+
+                config = TelegramConfig.from_env(
+                    data_dir=Path(self.config.storage_path).parent
+                )
+                self._telegram = TdJsonClient(config)
+        return self._telegram
+
+    @property
+    def telegram_configured(self) -> bool:
+        """True if real-mode Telegram credentials are present in the env."""
+        if self.demo:
+            return True
+        try:
+            from .telegram import TelegramConfig
+
+            TelegramConfig.from_env()
+        except Exception:
+            return False
+        return True
+
     # ------------------------------------------------- low-level building
 
     @staticmethod
@@ -510,6 +549,8 @@ class TonWalletSDK:
     async def close(self) -> None:
         self.lock()
         await self.pairing.stop()
+        if self._telegram is not None:
+            await self._telegram.close()
         await self._chain.close()
         await self.tonconnect.close()
 

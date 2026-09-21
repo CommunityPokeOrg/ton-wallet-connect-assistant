@@ -41,9 +41,22 @@ def test_demo_mode_full_flow(app):
         connect_tab = window.connect_tab
 
         # Sidebar navigation exposes all pages.
-        assert window.nav.count() == 6
+        assert window.nav.count() == 7
         # Companion/pairing tab exists and its bridge can start (loopback in demo).
         assert window.companion_tab.manager.demo
+        # Telegram tab is present and drives the demo client auth flow.
+        telegram_tab = window.telegram_tab
+        telegram_tab._start()
+        assert _pump_until(lambda: telegram_tab.client is not None
+                           and telegram_tab.client.auth_state.value == "wait_phone")
+        telegram_tab.phone_edit.setText("+15551234567")
+        telegram_tab._submit()
+        assert _pump_until(lambda: telegram_tab.client.auth_state.value == "wait_code")
+        telegram_tab.code_edit.setText("12345")
+        telegram_tab._submit()
+        assert _pump_until(lambda: telegram_tab.client.auth_state.value == "ready")
+        assert _pump_until(lambda: telegram_tab.chats_list.count() == 3)
+        assert _pump_until(lambda: telegram_tab.updates_list.count() > 0)
 
         # Wallet tab shows a demo account, balance and demo assets.
         assert "DEMO" in window.windowTitle()
